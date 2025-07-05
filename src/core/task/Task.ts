@@ -857,8 +857,13 @@ export class Task extends EventEmitter<ClineEvents> {
 		this.isInitialized = true
 
 		if (this.fileChangeManager && this.checkpointService) {
-			await this.fileChangeManager.updateBaseline(this.checkpointService.baseHash!, (from, to) =>
-				this.checkpointService!.getDiff({ from, to }),
+			await this.fileChangeManager.updateBaseline(
+				this.checkpointService.baseHash!,
+				(from, to) => this.checkpointService!.getDiff({ from, to }),
+				{
+					baseHash: this.checkpointService.baseHash,
+					_checkpoints: this.checkpointService.checkpoints,
+				},
 			)
 		}
 
@@ -1752,7 +1757,9 @@ export class Task extends EventEmitter<ClineEvents> {
 
 			const contextWindow = modelInfo.contextWindow
 
-			const currentProfileId = state?.listApiConfigMeta.find((profile) => profile.name === state?.currentApiConfigName)?.id ?? "default";
+			const currentProfileId =
+				state?.listApiConfigMeta.find((profile) => profile.name === state?.currentApiConfigName)?.id ??
+				"default"
 
 			const truncateResult = await truncateConversationIfNeeded({
 				messages: this.apiConversationHistory,

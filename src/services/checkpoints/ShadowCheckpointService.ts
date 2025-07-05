@@ -33,6 +33,10 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		this._baseHash = value
 	}
 
+	public get checkpoints() {
+		return [...this._checkpoints] // Return a copy to prevent external modification
+	}
+
 	public get isInitialized() {
 		return !!this.git
 	}

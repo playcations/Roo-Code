@@ -391,11 +391,94 @@ describe("FileChangeManager", () => {
 			const changes = fileChangeManager.getChanges()
 			expect(changes.baseCheckpoint).toBe("updated-baseline")
 
-			// File should still exist but line counts unchanged
+			// File should be removed since no diff was found (means no changes between checkpoints)
+			expect(changes.files).toHaveLength(0)
+		})
+
+		it("should remove files when new baseline is chronologically after file's toCheckpoint", async () => {
+			// Clear and add a file change with a specific toCheckpoint
+			fileChangeManager["changeset"].files.clear()
+			fileChangeManager.recordChange("src/test.ts", "edit", "checkpoint-1", "checkpoint-2", 5, 2)
+
+			vi.mocked(fs.writeFile).mockResolvedValue(undefined)
+
+			// Mock checkpoint service where checkpoint-3 comes after checkpoint-2
+			const mockCheckpointService = {
+				baseHash: "base-hash",
+				_checkpoints: ["checkpoint-1", "checkpoint-2", "checkpoint-3"],
+			}
+
+			const mockGetDiff = vi.fn().mockResolvedValue([])
+
+			// Update baseline to checkpoint-3 (which is after checkpoint-2)
+			await fileChangeManager.updateBaseline("checkpoint-3", mockGetDiff, mockCheckpointService)
+
+			const changes = fileChangeManager.getChanges()
+			expect(changes.baseCheckpoint).toBe("checkpoint-3")
+
+			// File should be removed since new baseline is after the file's toCheckpoint
+			expect(changes.files).toHaveLength(0)
+		})
+
+		it("should keep and recalculate files when new baseline is chronologically before file's toCheckpoint", async () => {
+			// Clear and add a file change
+			fileChangeManager["changeset"].files.clear()
+			fileChangeManager.recordChange("src/test.ts", "edit", "checkpoint-2", "checkpoint-3", 5, 2)
+
+			vi.mocked(fs.writeFile).mockResolvedValue(undefined)
+
+			// Mock checkpoint service where checkpoint-1 comes before checkpoint-3
+			const mockCheckpointService = {
+				baseHash: "base-hash",
+				_checkpoints: ["checkpoint-1", "checkpoint-2", "checkpoint-3"],
+			}
+
+			const mockGetDiff = vi.fn().mockResolvedValue([
+				{
+					paths: { relative: "src/test.ts", absolute: "/abs/src/test.ts" },
+					content: { before: "line1", after: "line1\nline2\nline3" },
+					type: "edit",
+				},
+			])
+
+			// Update baseline to checkpoint-1 (which is before checkpoint-3)
+			await fileChangeManager.updateBaseline("checkpoint-1", mockGetDiff, mockCheckpointService)
+
+			const changes = fileChangeManager.getChanges()
+			expect(changes.baseCheckpoint).toBe("checkpoint-1")
+
+			// File should be kept and recalculated
 			expect(changes.files).toHaveLength(1)
 			const change = changes.files[0]
-			expect(change.linesAdded).toBe(5) // Original values preserved
-			expect(change.linesRemoved).toBe(2)
+			expect(change.linesAdded).toBe(2) // 3 lines - 1 line = 2 added
+			expect(change.linesRemoved).toBe(0)
+			expect(change.fromCheckpoint).toBe("checkpoint-1")
+
+			expect(mockGetDiff).toHaveBeenCalledWith("checkpoint-1", "checkpoint-3")
+		})
+
+		it("should remove files when new baseline equals file's toCheckpoint", async () => {
+			// Clear and add a file change
+			fileChangeManager["changeset"].files.clear()
+			fileChangeManager.recordChange("src/test.ts", "edit", "checkpoint-1", "checkpoint-2", 5, 2)
+
+			vi.mocked(fs.writeFile).mockResolvedValue(undefined)
+
+			const mockCheckpointService = {
+				baseHash: "base-hash",
+				_checkpoints: ["checkpoint-1", "checkpoint-2", "checkpoint-3"],
+			}
+
+			const mockGetDiff = vi.fn().mockResolvedValue([])
+
+			// Update baseline to checkpoint-2 (same as file's toCheckpoint)
+			await fileChangeManager.updateBaseline("checkpoint-2", mockGetDiff, mockCheckpointService)
+
+			const changes = fileChangeManager.getChanges()
+			expect(changes.baseCheckpoint).toBe("checkpoint-2")
+
+			// File should be removed since baseline equals toCheckpoint (no diff)
+			expect(changes.files).toHaveLength(0)
 		})
 	})
 

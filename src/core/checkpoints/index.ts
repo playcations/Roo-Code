@@ -302,7 +302,10 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 		await provider?.postMessageToWebview({ type: "currentCheckpointUpdated", text: commitHash })
 
 		if (cline.fileChangeManager) {
-			await cline.fileChangeManager.updateBaseline(commitHash, (from, to) => service.getDiff({ from, to }))
+			await cline.fileChangeManager.updateBaseline(commitHash, (from, to) => service.getDiff({ from, to }), {
+				baseHash: service.baseHash,
+				_checkpoints: service.checkpoints,
+			})
 		}
 
 		if (mode === "restore") {

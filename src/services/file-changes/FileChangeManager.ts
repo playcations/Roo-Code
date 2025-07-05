@@ -278,25 +278,98 @@ export class FileChangeManager {
 	public async updateBaseline(
 		newBaseCheckpoint: string,
 		getDiff: (from: string, to: string) => Promise<any[]>,
+		checkpointService?: { baseHash?: string; _checkpoints?: string[] },
 	): Promise<void> {
 		this.changeset.baseCheckpoint = newBaseCheckpoint
 
-		for (const [uri, change] of this.changeset.files.entries()) {
-			const diffs = await getDiff(newBaseCheckpoint, change.toCheckpoint)
-			const fileDiff = diffs.find((d) => d.paths.relative === uri)
+		// Track files to remove (where newBaseCheckpoint is chronologically >= toCheckpoint)
+		const filesToRemove: string[] = []
 
-			if (fileDiff) {
-				const lineDiff = FileChangeManager.calculateLineDifferences(
-					fileDiff.content.before || "",
-					fileDiff.content.after || "",
-				)
-				change.linesAdded = lineDiff.linesAdded
-				change.linesRemoved = lineDiff.linesRemoved
+		for (const [uri, change] of this.changeset.files.entries()) {
+			// Determine if the new baseline checkpoint is chronologically before the file's toCheckpoint
+			const shouldKeepFile = this.isCheckpointBefore(newBaseCheckpoint, change.toCheckpoint, checkpointService)
+
+			if (!shouldKeepFile) {
+				// The new baseline is at or after the file's toCheckpoint, so remove this file
+				filesToRemove.push(uri)
+				continue
 			}
+
+			// File should be kept - recalculate the diff from new baseline to toCheckpoint
+			try {
+				const diffs = await getDiff(newBaseCheckpoint, change.toCheckpoint)
+				const fileDiff = diffs.find((d) => d.paths.relative === uri)
+
+				if (fileDiff) {
+					const lineDiff = FileChangeManager.calculateLineDifferences(
+						fileDiff.content.before || "",
+						fileDiff.content.after || "",
+					)
+					change.linesAdded = lineDiff.linesAdded
+					change.linesRemoved = lineDiff.linesRemoved
+					change.fromCheckpoint = newBaseCheckpoint
+				} else {
+					// No diff found - this means the file is the same in both checkpoints, remove it
+					filesToRemove.push(uri)
+				}
+			} catch (error) {
+				// If diff calculation fails, remove the file to be safe
+				console.error(`Failed to calculate diff for ${uri}:`, error)
+				filesToRemove.push(uri)
+			}
+		}
+
+		// Remove files that are no longer relevant
+		for (const uri of filesToRemove) {
+			this.changeset.files.delete(uri)
 		}
 
 		await this.persistChanges()
 		this._onDidChange.fire()
+	}
+
+	/**
+	 * Determines if checkpoint A is chronologically before checkpoint B
+	 * Returns true if A comes before B in time, false otherwise
+	 */
+	private isCheckpointBefore(
+		checkpointA: string,
+		checkpointB: string,
+		checkpointService?: { baseHash?: string; _checkpoints?: string[] },
+	): boolean {
+		// If they're the same checkpoint, A is not before B
+		if (checkpointA === checkpointB) {
+			return false
+		}
+
+		// If no checkpoint service provided, we can't determine order - default to keeping the file
+		if (!checkpointService) {
+			return true
+		}
+
+		const { baseHash, _checkpoints = [] } = checkpointService
+
+		// Handle special case where one is the baseHash
+		if (checkpointA === baseHash) {
+			// baseHash is the earliest, so it's before everything except itself
+			return checkpointB !== baseHash
+		}
+		if (checkpointB === baseHash) {
+			// Nothing can be before baseHash
+			return false
+		}
+
+		// Both are in the checkpoints array - compare their indices
+		const indexA = _checkpoints.indexOf(checkpointA)
+		const indexB = _checkpoints.indexOf(checkpointB)
+
+		// If either checkpoint is not found, we can't determine order - default to keeping the file
+		if (indexA === -1 || indexB === -1) {
+			return true
+		}
+
+		// Lower index means earlier in time
+		return indexA < indexB
 	}
 
 	/**
