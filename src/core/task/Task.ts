@@ -123,7 +123,6 @@ export type TaskOptions = {
 	parentTask?: Task
 	taskNumber?: number
 	onCreated?: (cline: Task) => void
-	fileChangeManager?: FileChangeManager
 	checkpointService?: RepoPerTaskCheckpointService
 }
 
@@ -167,7 +166,6 @@ export class Task extends EventEmitter<ClineEvents> {
 	fileContextTracker: FileContextTracker
 	urlContentFetcher: UrlContentFetcher
 	terminalProcess?: RooTerminalProcess
-	public fileChangeManager?: FileChangeManager
 
 	public async applyFileChanges(
 		isNewFile: boolean,
@@ -240,7 +238,6 @@ export class Task extends EventEmitter<ClineEvents> {
 		parentTask,
 		taskNumber = -1,
 		onCreated,
-		fileChangeManager,
 		checkpointService,
 	}: TaskOptions) {
 		super()
@@ -264,7 +261,6 @@ export class Task extends EventEmitter<ClineEvents> {
 			parentTask,
 			taskNumber,
 			onCreated,
-			fileChangeManager,
 			checkpointService,
 		}
 		this.taskId = historyItem ? historyItem.id : crypto.randomUUID()
@@ -296,7 +292,6 @@ export class Task extends EventEmitter<ClineEvents> {
 		this.diffViewProvider = new DiffViewProvider(this.cwd)
 		this.enableCheckpoints = enableCheckpoints
 
-		this.fileChangeManager = fileChangeManager
 		this.checkpointService = checkpointService
 
 		this.rootTask = rootTask
@@ -429,7 +424,7 @@ export class Task extends EventEmitter<ClineEvents> {
 				taskNumber: this.taskNumber,
 				globalStoragePath: this.globalStoragePath,
 				workspace: this.cwd,
-				fileChangeCount: this.fileChangeManager?.getFileChangeCount() || 0,
+				fileChangeCount: this.providerRef.deref()?.getFileChangeManager()?.getFileChangeCount() || 0,
 			})
 
 			this.emit("taskTokenUsageUpdated", this.taskId, tokenUsage)
@@ -855,17 +850,6 @@ export class Task extends EventEmitter<ClineEvents> {
 		}
 
 		this.isInitialized = true
-
-		if (this.fileChangeManager && this.checkpointService) {
-			await this.fileChangeManager.updateBaseline(
-				this.checkpointService.baseHash!,
-				(from, to) => this.checkpointService!.getDiff({ from, to }),
-				{
-					baseHash: this.checkpointService.baseHash,
-					_checkpoints: this.checkpointService.checkpoints,
-				},
-			)
-		}
 
 		const { response, text, images } = await this.ask(askType) // calls poststatetowebview
 		let responseText: string | undefined

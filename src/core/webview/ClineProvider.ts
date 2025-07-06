@@ -69,6 +69,7 @@ import { WebviewMessage } from "../../shared/WebviewMessage"
 import { EMBEDDING_MODEL_PROFILES } from "../../shared/embeddingModels"
 import { ProfileValidator } from "../../shared/ProfileValidator"
 import { getWorkspaceGitInfo } from "../../utils/git"
+import { getInitializedCheckpointService } from "../checkpoints"
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
  * https://github.com/KumarVariable/vscode-extension-sidebar-html/blob/master/src/customSidebarViewProvider.ts
@@ -106,6 +107,7 @@ export class ClineProvider
 	protected mcpHub?: McpHub // Change from private to protected
 	private marketplaceManager: MarketplaceManager
 	private mdmService?: MdmService
+	private globalFileChangeManager?: import("../../services/file-changes/FileChangeManager").FileChangeManager
 
 	public isViewLaunched = false
 	public settingsImportedAt?: number
@@ -280,6 +282,8 @@ export class ClineProvider
 		this.mcpHub = undefined
 		this.marketplaceManager?.cleanup()
 		this.customModesManager?.dispose()
+		this.globalFileChangeManager?.dispose()
+		this.globalFileChangeManager = undefined
 		this.log("Disposed all disposables")
 		ClineProvider.activeInstances.delete(this)
 
@@ -560,34 +564,17 @@ export class ClineProvider
 			parentTask,
 			taskNumber: this.clineStack.length + 1,
 			onCreated: (cline: Task) => this.emit("clineCreated", cline),
-			fileChangeManager: parentTask?.fileChangeManager,
 			checkpointService: parentTask?.checkpointService,
 			...options,
 		})
-
-		if (cline.fileChangeManager) {
-			this.webviewDisposables.push(
-				cline.fileChangeManager.onDidChange(() => {
-					if (cline.fileChangeManager) {
-						this.postMessageToWebview({
-							type: "filesChanged",
-							filesChanged: cline.fileChangeManager.getChanges(),
-						})
-					}
-				}),
-			)
-			// Push initial state
-			this.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: cline.fileChangeManager.getChanges(),
-			})
-		}
 
 		await this.addClineToStack(cline)
 
 		this.log(
 			`[subtasks] ${cline.parentTask ? "child" : "parent"} task ${cline.taskId}.${cline.instanceId} instantiated`,
 		)
+
+		await this.syncFileChangeManagerWithTask(cline)
 
 		return cline
 	}
@@ -617,28 +604,11 @@ export class ClineProvider
 			onCreated: (cline: Task) => this.emit("clineCreated", cline),
 		})
 
-		if (cline.fileChangeManager) {
-			this.webviewDisposables.push(
-				cline.fileChangeManager.onDidChange(() => {
-					if (cline.fileChangeManager) {
-						this.postMessageToWebview({
-							type: "filesChanged",
-							filesChanged: cline.fileChangeManager.getChanges(),
-						})
-					}
-				}),
-			)
-			// Push initial state
-			this.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: cline.fileChangeManager.getChanges(),
-			})
-		}
-
 		await this.addClineToStack(cline)
 		this.log(
 			`[subtasks] ${cline.parentTask ? "child" : "parent"} task ${cline.taskId}.${cline.instanceId} instantiated`,
 		)
+		await this.syncFileChangeManagerWithTask(cline)
 		return cline
 	}
 
@@ -847,19 +817,22 @@ export class ClineProvider
 				return
 			}
 			switch (message.type) {
-				case "webviewReady":
-					if (task?.fileChangeManager) {
+				case "webviewReady": {
+					const fileChangeManager = this.getFileChangeManager()
+					if (fileChangeManager) {
 						this.postMessageToWebview({
 							type: "filesChanged",
-							filesChanged: task.fileChangeManager.getChanges(),
+							filesChanged: fileChangeManager.getChanges(),
 						})
 					}
 					break
-				case "viewDiff":
-					if (message.uri && task.fileChangeManager && task.checkpointService) {
+				}
+				case "viewDiff": {
+					const diffFileChangeManager = this.getFileChangeManager()
+					if (message.uri && diffFileChangeManager && task.checkpointService) {
 						console.log(`ClineProvider: Handling viewDiff for URI: ${message.uri}`)
 						// Get the file change information
-						const changeset = task.fileChangeManager.getChanges()
+						const changeset = diffFileChangeManager.getChanges()
 						const fileChange = changeset.files.find((f) => f.uri === message.uri)
 
 						if (fileChange) {
@@ -939,25 +912,29 @@ export class ClineProvider
 						}
 					}
 					break
-				case "acceptFileChange":
-					if (message.uri && task.fileChangeManager) {
+				}
+				case "acceptFileChange": {
+					const acceptFileChangeManager = this.getFileChangeManager()
+					if (message.uri && acceptFileChangeManager) {
 						console.log(`ClineProvider: Handling acceptFileChange for URI: ${message.uri}`)
-						await task.fileChangeManager.acceptChange(message.uri)
+						await acceptFileChangeManager.acceptChange(message.uri)
 
 						// Send updated state
-						const updatedChangeset = task.fileChangeManager.getChanges()
+						const updatedChangeset = acceptFileChangeManager.getChanges()
 						this.postMessageToWebview({
 							type: "filesChanged",
 							filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
 						})
 					}
 					break
-				case "rejectFileChange":
-					if (message.uri && task.fileChangeManager) {
+				}
+				case "rejectFileChange": {
+					const rejectFileChangeManager = this.getFileChangeManager()
+					if (message.uri && rejectFileChangeManager) {
 						console.log(`ClineProvider: Handling rejectFileChange for URI: ${message.uri}`)
 
 						// Get the file change information before removing it
-						const fileChange = task.fileChangeManager.getFileChange(message.uri)
+						const fileChange = rejectFileChangeManager.getFileChange(message.uri)
 						if (fileChange && task.checkpointService) {
 							try {
 								// Get the original content of the file from the fromCheckpoint using getDiff
@@ -996,19 +973,21 @@ export class ClineProvider
 						}
 
 						// Remove from tracking
-						await task.fileChangeManager.rejectChange(message.uri)
+						await rejectFileChangeManager.rejectChange(message.uri)
 
 						// Send updated state
-						const updatedChangeset = task.fileChangeManager.getChanges()
+						const updatedChangeset = rejectFileChangeManager.getChanges()
 						this.postMessageToWebview({
 							type: "filesChanged",
 							filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
 						})
 					}
 					break
-				case "acceptAllFileChanges":
+				}
+				case "acceptAllFileChanges": {
 					console.log("ClineProvider: Handling acceptAllFileChanges.")
-					await task.fileChangeManager?.acceptAll()
+					const acceptAllFileChangeManager = this.getFileChangeManager()
+					await acceptAllFileChangeManager?.acceptAll()
 
 					// Clear state
 					this.postMessageToWebview({
@@ -1016,13 +995,15 @@ export class ClineProvider
 						filesChanged: undefined,
 					})
 					break
-				case "rejectAllFileChanges":
-					if (task.fileChangeManager && task.checkpointService) {
+				}
+				case "rejectAllFileChanges": {
+					const rejectAllFileChangeManager = this.getFileChangeManager()
+					if (rejectAllFileChangeManager && task.checkpointService) {
 						console.log("ClineProvider: Handling rejectAllFileChanges.")
 
 						try {
 							// Revert all changes to the base checkpoint
-							const changeset = task.fileChangeManager.getChanges()
+							const changeset = rejectAllFileChangeManager.getChanges()
 							if (changeset.files.length > 0) {
 								await task.checkpointService.restoreCheckpoint(changeset.baseCheckpoint)
 								console.log(
@@ -1034,7 +1015,7 @@ export class ClineProvider
 						}
 
 						// Clear all tracking
-						await task.fileChangeManager.rejectAll()
+						await rejectAllFileChangeManager.rejectAll()
 
 						// Clear state
 						this.postMessageToWebview({
@@ -1043,6 +1024,7 @@ export class ClineProvider
 						})
 					}
 					break
+				}
 				default:
 					console.log(`ClineProvider: Delegating to webviewMessageHandler for type: ${message.type}`)
 					webviewMessageHandler(this, message, this.marketplaceManager)
@@ -1234,25 +1216,8 @@ export class ClineProvider
 
 		cline.abortTask()
 
-		// Check if there are actual file changes before clearing UI
-		if (cline.fileChangeManager) {
-			const changeset = cline.fileChangeManager.getChanges()
-
-			// Only clear UI if no changes exist, otherwise preserve them
-			if (changeset.files.length === 0) {
-				this.postMessageToWebview({
-					type: "filesChanged",
-					filesChanged: undefined,
-				})
-			}
-			// If changes exist, keep them visible but stop tracking new ones
-		} else {
-			// No file change manager, safe to clear
-			this.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
-		}
+		// FileChangeManager persists independently of task lifecycle
+		// No need to clear or modify file changes when cancelling tasks
 
 		await pWaitFor(
 			() =>
@@ -2047,6 +2012,82 @@ export class ClineProvider
 	// Add public getter
 	public getMcpHub(): McpHub | undefined {
 		return this.mcpHub
+	}
+
+	/**
+	 * Get the global FileChangeManager instance
+	 */
+	public getFileChangeManager():
+		| import("../../services/file-changes/FileChangeManager").FileChangeManager
+		| undefined {
+		return this.globalFileChangeManager
+	}
+
+	/**
+	 * Ensure FileChangeManager exists and return it (lazy initialization)
+	 */
+	private async ensureFileChangeManager(): Promise<
+		import("../../services/file-changes/FileChangeManager").FileChangeManager
+	> {
+		if (!this.globalFileChangeManager) {
+			const { FileChangeManager } = await import("../../services/file-changes/FileChangeManager")
+			this.globalFileChangeManager = new FileChangeManager(
+				"HEAD", // Initial baseline - will be updated when checkpoint service initializes
+				"global", // Use a global identifier instead of task-specific ID
+				this.context.globalStorageUri.fsPath,
+				this,
+			)
+
+			// Set up event listener for file changes
+			this.webviewDisposables.push(
+				this.globalFileChangeManager.onDidChange(() => {
+					if (this.globalFileChangeManager) {
+						this.postMessageToWebview({
+							type: "filesChanged",
+							filesChanged: this.globalFileChangeManager.getChanges(),
+						})
+					}
+				}),
+			)
+
+			// Restore saved state if available (from checkpoint restoration)
+			const savedState = (this as any).pendingFileChangeManagerState
+			if (savedState) {
+				try {
+					this.globalFileChangeManager.restoreState(savedState)
+					console.log("[ClineProvider] Restored FileChangeManager state from checkpoint restoration")
+					// Clean up the saved state
+					delete (this as any).pendingFileChangeManagerState
+				} catch (error) {
+					console.error("[ClineProvider] Failed to restore FileChangeManager state:", error)
+				}
+			}
+		}
+		return this.globalFileChangeManager
+	}
+
+	private async syncFileChangeManagerWithTask(task: Task) {
+		const fileChangeManager = await this.ensureFileChangeManager()
+		const checkpointService = await getInitializedCheckpointService(task)
+
+		if (fileChangeManager && checkpointService?.baseHash) {
+			const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
+			if (currentBaseline !== checkpointService.baseHash) {
+				try {
+					await fileChangeManager.updateBaseline(
+						checkpointService.baseHash,
+						(from, to) => checkpointService.getDiff({ from, to }),
+						{
+							baseHash: checkpointService.baseHash,
+							_checkpoints: checkpointService.checkpoints,
+						},
+					)
+					this.log(`[ClineProvider] Synchronized FileChangeManager baseline to ${checkpointService.baseHash}`)
+				} catch (error) {
+					this.log(`[ClineProvider] Failed to synchronize FileChangeManager baseline: ${error}`)
+				}
+			}
+		}
 	}
 
 	/**

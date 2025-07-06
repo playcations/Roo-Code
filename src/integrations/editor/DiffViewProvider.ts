@@ -203,14 +203,19 @@ export class DiffViewProvider {
 		await this.closeAllDiffViews()
 
 		// Track this file change in the FileChangeManager when LLM saves edits
-		if (task.fileChangeManager && task.checkpointService && this.relPath) {
+		const provider = task.providerRef.deref()
+		const fileChangeManager = provider?.getFileChangeManager()
+		if (fileChangeManager && task.checkpointService && this.relPath) {
 			try {
-				// Create a checkpoint FIRST to capture the file changes
+				// Get the baseline checkpoint for this file
+				const changeset = fileChangeManager.getChanges()
+				const fromCheckpoint = changeset.baseCheckpoint
+
+				// Create a checkpoint to capture the new state
 				const fileUri = vscode.Uri.file(path.join(task.cwd, this.relPath))
 				await checkpointSave(task, false, [fileUri])
-
-				// Now get the newly created checkpoint
 				const newCheckpoint = task.checkpointService.getCurrentCheckpoint()
+
 				if (newCheckpoint) {
 					// Calculate line differences
 					const lineDiff = (
@@ -220,12 +225,8 @@ export class DiffViewProvider {
 					// Determine change type
 					const changeType = this.editType === "create" ? "create" : "edit"
 
-					// Get the baseline checkpoint for this file
-					const changeset = task.fileChangeManager.getChanges()
-					const fromCheckpoint = changeset.baseCheckpoint
-
-					// Record the file change
-					task.fileChangeManager.recordChange(
+					// Record the file change now that we have the `to` checkpoint
+					fileChangeManager.recordChange(
 						this.relPath,
 						changeType,
 						fromCheckpoint,
@@ -235,18 +236,13 @@ export class DiffViewProvider {
 					)
 
 					// Notify the webview about the file changes (only if tracking is enabled)
-					const provider = task.providerRef.deref()
 					const filesChangedEnabled = provider?.getValue("filesChangedEnabled") ?? true
 					if (provider && filesChangedEnabled) {
-						const updatedChangeset = task.fileChangeManager.getChanges()
+						const updatedChangeset = fileChangeManager.getChanges()
 						if (updatedChangeset.files.length > 0) {
-							const serializableChangeset = {
-								...updatedChangeset,
-								files: Array.from(updatedChangeset.files.values()),
-							}
 							provider.postMessageToWebview({
 								type: "filesChanged",
-								filesChanged: serializableChangeset,
+								filesChanged: updatedChangeset,
 							})
 						}
 					}

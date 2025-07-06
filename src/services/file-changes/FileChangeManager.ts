@@ -141,6 +141,7 @@ export class FileChangeManager {
 		console.log(
 			`FileChangeManager: Recording change for URI: ${uri}, Type: ${type}, From: ${fromCheckpoint}, To: ${toCheckpoint}`,
 		)
+
 		const existingChange = this.changeset.files.get(uri)
 
 		if (existingChange) {
@@ -148,21 +149,12 @@ export class FileChangeManager {
 			// If it's deleted, all previous changes are moot.
 			const newType = existingChange.type === "create" && type === "edit" ? "create" : type
 
-			// Only update toCheckpoint if it's not "pending" or if the new one is not "pending"
-			const newToCheckpoint = toCheckpoint === "pending" ? existingChange.toCheckpoint : toCheckpoint
-
 			this.changeset.files.set(uri, {
 				...existingChange,
 				type: newType,
-				toCheckpoint: newToCheckpoint,
-				linesAdded:
-					toCheckpoint === "pending"
-						? existingChange.linesAdded
-						: (existingChange.linesAdded || 0) + (linesAdded || 0),
-				linesRemoved:
-					toCheckpoint === "pending"
-						? existingChange.linesRemoved
-						: (existingChange.linesRemoved || 0) + (linesRemoved || 0),
+				toCheckpoint: toCheckpoint,
+				linesAdded: (existingChange.linesAdded || 0) + (linesAdded || 0),
+				linesRemoved: (existingChange.linesRemoved || 0) + (linesRemoved || 0),
 			})
 		} else {
 			this.changeset.files.set(uri, {
@@ -276,28 +268,41 @@ export class FileChangeManager {
 	}
 
 	public async updateBaseline(
-		newBaseCheckpoint: string,
+		restoreCheckpoint: string,
 		getDiff: (from: string, to: string) => Promise<any[]>,
 		checkpointService?: { baseHash?: string; _checkpoints?: string[] },
 	): Promise<void> {
-		this.changeset.baseCheckpoint = newBaseCheckpoint
+		// If restoring to the same checkpoint as current baseline, no changes needed
+		if (restoreCheckpoint === this.changeset.baseCheckpoint) {
+			console.log(
+				`[FileChangeManager] Restore checkpoint ${restoreCheckpoint} is same as current baseline, keeping all files`,
+			)
+			return
+		}
 
-		// Track files to remove (where newBaseCheckpoint is chronologically >= toCheckpoint)
+		console.log(
+			`[FileChangeManager] Updating baseline from ${this.changeset.baseCheckpoint} to ${restoreCheckpoint}`,
+		)
+
+		// Update the baseline to the restore point
+		this.changeset.baseCheckpoint = restoreCheckpoint
+
+		// Track files to remove (where restoreCheckpoint is chronologically >= toCheckpoint)
 		const filesToRemove: string[] = []
 
 		for (const [uri, change] of this.changeset.files.entries()) {
-			// Determine if the new baseline checkpoint is chronologically before the file's toCheckpoint
-			const shouldKeepFile = this.isCheckpointBefore(newBaseCheckpoint, change.toCheckpoint, checkpointService)
+			// Determine if the restore checkpoint is chronologically before the file's toCheckpoint
+			const shouldKeepFile = this.isCheckpointBefore(restoreCheckpoint, change.toCheckpoint, checkpointService)
 
 			if (!shouldKeepFile) {
-				// The new baseline is at or after the file's toCheckpoint, so remove this file
+				// The restore checkpoint is at or after the file's toCheckpoint, so remove this file
 				filesToRemove.push(uri)
 				continue
 			}
 
 			// File should be kept - recalculate the diff from new baseline to toCheckpoint
 			try {
-				const diffs = await getDiff(newBaseCheckpoint, change.toCheckpoint)
+				const diffs = await getDiff(restoreCheckpoint, change.toCheckpoint)
 				const fileDiff = diffs.find((d) => d.paths.relative === uri)
 
 				if (fileDiff) {
@@ -307,7 +312,7 @@ export class FileChangeManager {
 					)
 					change.linesAdded = lineDiff.linesAdded
 					change.linesRemoved = lineDiff.linesRemoved
-					change.fromCheckpoint = newBaseCheckpoint
+					change.fromCheckpoint = restoreCheckpoint
 				} else {
 					// No diff found - this means the file is the same in both checkpoints, remove it
 					filesToRemove.push(uri)
@@ -331,6 +336,7 @@ export class FileChangeManager {
 	/**
 	 * Determines if checkpoint A is chronologically before checkpoint B
 	 * Returns true if A comes before B in time, false otherwise
+	 * Both checkpoints must be real git commit hashes
 	 */
 	private isCheckpointBefore(
 		checkpointA: string,
@@ -344,6 +350,7 @@ export class FileChangeManager {
 
 		// If no checkpoint service provided, we can't determine order - default to keeping the file
 		if (!checkpointService) {
+			console.warn("FileChangeManager: No checkpoint service provided for comparison, keeping file")
 			return true
 		}
 
@@ -365,6 +372,9 @@ export class FileChangeManager {
 
 		// If either checkpoint is not found, we can't determine order - default to keeping the file
 		if (indexA === -1 || indexB === -1) {
+			console.warn(
+				`FileChangeManager: Checkpoint not found in service - A: ${checkpointA} (index: ${indexA}), B: ${checkpointB} (index: ${indexB}), keeping file`,
+			)
 			return true
 		}
 
@@ -523,6 +533,44 @@ export class FileChangeManager {
 	 */
 	public getFileChangeCount(): number {
 		return this.changeset.files.size
+	}
+
+	/**
+	 * Serialize the current state for preservation across task recreation
+	 */
+	public serializeState(): string {
+		const state = {
+			baseCheckpoint: this.changeset.baseCheckpoint,
+			files: Array.from(this.changeset.files.values()),
+			taskId: this.taskId,
+			instanceId: this.instanceId,
+		}
+		return JSON.stringify(state)
+	}
+
+	/**
+	 * Restore state from serialized data
+	 */
+	public restoreState(serializedState: string): void {
+		try {
+			const state = JSON.parse(serializedState)
+
+			// Restore changeset
+			this.changeset.baseCheckpoint = state.baseCheckpoint
+			this.changeset.files = new Map()
+
+			// Restore files
+			if (state.files && Array.isArray(state.files)) {
+				for (const fileChange of state.files) {
+					this.changeset.files.set(fileChange.uri, fileChange)
+				}
+			}
+
+			// Fire change event to update UI
+			this._onDidChange.fire()
+		} catch (error) {
+			console.error("Failed to restore FileChangeManager state:", error)
+		}
 	}
 
 	/**

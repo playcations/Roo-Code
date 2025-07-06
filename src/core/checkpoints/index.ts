@@ -77,7 +77,7 @@ export function getCheckpointService(cline: Task) {
 
 		cline.checkpointServiceInitializing = true
 
-		service.on("initialize", () => {
+		service.on("initialize", async () => {
 			log("[Task#getCheckpointService] service initialized")
 
 			try {
@@ -108,24 +108,20 @@ export function getCheckpointService(cline: Task) {
 				cline.checkpointService = service
 				cline.checkpointServiceInitializing = false
 
-				// Create FileChangeManager immediately after checkpoint service initialization
-				// This ensures it exists before any baseline update attempts in resumeTaskFromHistory()
-				if (!cline.fileChangeManager && provider) {
-					try {
-						const baseHash = service.baseHash || "HEAD"
-						cline.fileChangeManager = new FileChangeManager(
-							baseHash,
-							cline.taskId,
-							provider.context.globalStorageUri.fsPath,
-							provider,
-						)
-						log(`[Task#getCheckpointService] FileChangeManager created with baseline: ${baseHash}`)
-					} catch (error) {
-						log(`[Task#getCheckpointService] Failed to create FileChangeManager: ${error}`)
-						// Continue without FileChangeManager - checkpoint functionality will still work
+				// Update FileChangeManager baseline to match checkpoint service if it was created with default "HEAD"
+				const fileChangeManager = provider?.getFileChangeManager()
+				if (fileChangeManager && service.baseHash) {
+					const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
+					if (currentBaseline === "HEAD" && service.baseHash !== "HEAD") {
+						try {
+							await fileChangeManager.updateBaseline(service.baseHash, () => Promise.resolve([]))
+							log(
+								`[Task#getCheckpointService] Updated FileChangeManager baseline from HEAD to ${service.baseHash}`,
+							)
+						} catch (error) {
+							log(`[Task#getCheckpointService] Failed to update FileChangeManager baseline: ${error}`)
+						}
 					}
-				} else if (cline.fileChangeManager) {
-					log("[Task#getCheckpointService] FileChangeManager already exists, skipping creation")
 				}
 
 				if (isCheckpointNeeded) {
@@ -163,8 +159,9 @@ export function getCheckpointService(cline: Task) {
 				// when new checkpoints are created.
 
 				// Send current file changes to the webview (if any exist)
-				if (cline.fileChangeManager) {
-					const changeset = cline.fileChangeManager.getChanges()
+				const checkpointFileChangeManager = provider?.getFileChangeManager()
+				if (checkpointFileChangeManager) {
+					const changeset = checkpointFileChangeManager.getChanges()
 					if (changeset.files.length > 0) {
 						const serializableChangeset = {
 							...changeset,
@@ -296,17 +293,22 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 
 	const provider = cline.providerRef.deref()
 
+	// Preserve FileChangeManager state before task cancellation
+	let savedFileChangeManagerState: string | undefined
+	const restoreFileChangeManager = provider?.getFileChangeManager()
+	if (restoreFileChangeManager) {
+		try {
+			savedFileChangeManagerState = restoreFileChangeManager.serializeState()
+			console.log("[checkpointRestore] Saved FileChangeManager state before task cancellation")
+		} catch (error) {
+			console.error("[checkpointRestore] Failed to save FileChangeManager state:", error)
+		}
+	}
+
 	try {
 		await service.restoreCheckpoint(commitHash)
 		TelemetryService.instance.captureCheckpointRestored(cline.taskId)
 		await provider?.postMessageToWebview({ type: "currentCheckpointUpdated", text: commitHash })
-
-		if (cline.fileChangeManager) {
-			await cline.fileChangeManager.updateBaseline(commitHash, (from, to) => service.getDiff({ from, to }), {
-				baseHash: service.baseHash,
-				_checkpoints: service.checkpoints,
-			})
-		}
 
 		if (mode === "restore") {
 			await cline.overwriteApiConversationHistory(cline.apiConversationHistory.filter((m) => !m.ts || m.ts < ts))
@@ -330,6 +332,11 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 					cost: totalCost,
 				} satisfies ClineApiReqInfo),
 			)
+		}
+
+		// Store the saved state in provider context so it can be retrieved after task recreation
+		if (provider && savedFileChangeManagerState) {
+			;(provider as any).pendingFileChangeManagerState = savedFileChangeManagerState
 		}
 
 		// The task is already cancelled by the provider beforehand, but we
