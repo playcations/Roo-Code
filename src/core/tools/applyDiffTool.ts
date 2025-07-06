@@ -170,7 +170,7 @@ export async function applyDiffToolLegacy(
 			}
 
 			// Call saveChanges to update the DiffViewProvider properties
-			await cline.diffViewProvider.saveChanges(cline)
+			await cline.diffViewProvider.saveChanges()
 
 			// Track file edit operation
 			if (relPath) {

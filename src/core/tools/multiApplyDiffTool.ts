@@ -553,7 +553,7 @@ ${errorDetails ? `\nTechnical details:\n${errorDetails}\n` : ""}
 				}
 
 				// Call saveChanges to update the DiffViewProvider properties
-				await cline.diffViewProvider.saveChanges(cline)
+				await cline.diffViewProvider.saveChanges()
 
 				// Track file edit operation
 				await cline.fileContextTracker.trackFileContext(relPath, "roo_edited" as RecordSource)

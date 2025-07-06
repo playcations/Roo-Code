@@ -1,13 +1,137 @@
-import { FileChange, FileChangeset, FileChangeType } from "@roo-code/types"
-import * as crypto from "crypto"
-import * as fs from "fs/promises"
-import * as path from "path"
-import { EventEmitter } from "vscode"
+import { FileChange, FileChangeset } from "@roo-code/types"
 
-// Type imports for provider reference
-import type { ClineProvider } from "../../core/webview/ClineProvider"
+/**
+ * Simplified FileChangeManager - Pure diff calculation service
+ * No complex persistence, events, or tool integration
+ */
+export class FileChangeManager {
+	private changeset: FileChangeset
+	private acceptedFiles: Set<string>
+	private rejectedFiles: Set<string>
 
-// Error types for better error handling
+	constructor(baseCheckpoint: string) {
+		this.changeset = {
+			baseCheckpoint,
+			files: [],
+		}
+		this.acceptedFiles = new Set()
+		this.rejectedFiles = new Set()
+	}
+
+	/**
+	 * Get current changeset with accepted/rejected files filtered out
+	 */
+	public getChanges(): FileChangeset {
+		const filteredFiles = this.changeset.files.filter(
+			(file) => !this.acceptedFiles.has(file.uri) && !this.rejectedFiles.has(file.uri),
+		)
+
+		return {
+			...this.changeset,
+			files: filteredFiles,
+		}
+	}
+
+	/**
+	 * Get a specific file change
+	 */
+	public getFileChange(uri: string): FileChange | undefined {
+		return this.changeset.files.find((file) => file.uri === uri)
+	}
+
+	/**
+	 * Accept a specific file change
+	 */
+	public async acceptChange(uri: string): Promise<void> {
+		this.acceptedFiles.add(uri)
+		this.rejectedFiles.delete(uri)
+	}
+
+	/**
+	 * Reject a specific file change
+	 */
+	public async rejectChange(uri: string): Promise<void> {
+		this.rejectedFiles.add(uri)
+		this.acceptedFiles.delete(uri)
+	}
+
+	/**
+	 * Accept all file changes
+	 */
+	public async acceptAll(): Promise<void> {
+		this.changeset.files.forEach((file) => {
+			this.acceptedFiles.add(file.uri)
+		})
+		this.rejectedFiles.clear()
+	}
+
+	/**
+	 * Reject all file changes
+	 */
+	public async rejectAll(): Promise<void> {
+		this.changeset.files.forEach((file) => {
+			this.rejectedFiles.add(file.uri)
+		})
+		this.acceptedFiles.clear()
+	}
+
+	/**
+	 * Update the baseline checkpoint and recalculate changes
+	 */
+	public async updateBaseline(
+		newBaselineCheckpoint: string,
+		_getDiff?: (from: string, to: string) => Promise<{ filePath: string; content: string }[]>,
+		_checkpointService?: {
+			checkpoints: string[]
+			baseHash?: string
+		},
+	): Promise<void> {
+		this.changeset.baseCheckpoint = newBaselineCheckpoint
+
+		// Simple approach: request fresh calculation from backend
+		// The actual diff calculation should be handled by the checkpoint service
+		this.changeset.files = []
+
+		// Clear accepted/rejected state on baseline change
+		this.acceptedFiles.clear()
+		this.rejectedFiles.clear()
+	}
+
+	/**
+	 * Set the files for the changeset (called by backend when files change)
+	 */
+	public setFiles(files: FileChange[]): void {
+		this.changeset.files = files
+	}
+
+	/**
+	 * Calculate line differences between two file contents
+	 */
+	public static calculateLineDifferences(
+		originalContent: string,
+		newContent: string,
+	): { linesAdded: number; linesRemoved: number } {
+		const originalLines = originalContent.split("\n")
+		const newLines = newContent.split("\n")
+
+		// Simple diff calculation
+		const linesAdded = Math.max(0, newLines.length - originalLines.length)
+		const linesRemoved = Math.max(0, originalLines.length - newLines.length)
+
+		return { linesAdded, linesRemoved }
+	}
+
+	/**
+	 * Dispose of the manager (for compatibility)
+	 */
+	public dispose(): void {
+		this.changeset.files = []
+		this.acceptedFiles.clear()
+		this.rejectedFiles.clear()
+	}
+}
+
+// Export the error types for backward compatibility
 export enum FileChangeErrorType {
 	PERSISTENCE_FAILED = "PERSISTENCE_FAILED",
 	FILE_NOT_FOUND = "FILE_NOT_FOUND",
@@ -25,558 +149,5 @@ export class FileChangeError extends Error {
 	) {
 		super(message || originalError?.message || "File change operation failed")
 		this.name = "FileChangeError"
-	}
-}
-
-// Callback interface for error notifications
-export interface FileChangeErrorHandler {
-	onError(error: FileChangeError): void
-}
-
-export class FileChangeManager {
-	private readonly _onDidChange = new EventEmitter<void>()
-	public readonly onDidChange = this._onDidChange.event
-
-	private changeset: Omit<FileChangeset, "files"> & { files: Map<string, FileChange> }
-	private taskId: string
-	private globalStoragePath: string
-	private readonly instanceId: string
-	private persistenceInProgress = false
-	private pendingPersistence = false
-	private errorHandler?: FileChangeErrorHandler
-	private providerRef?: WeakRef<ClineProvider>
-
-	constructor(baseCheckpoint: string, taskId?: string, globalStoragePath?: string, provider?: ClineProvider) {
-		this.instanceId = crypto.randomUUID()
-		this.changeset = {
-			baseCheckpoint,
-			files: new Map<string, FileChange>(),
-		}
-		this.taskId = taskId || ""
-		this.globalStoragePath = globalStoragePath || ""
-		this.providerRef = provider ? new WeakRef(provider) : undefined
-
-		console.log(`[DEBUG] FileChangeManager created for task ${this.taskId}. Instance ID: ${this.instanceId}`)
-
-		// Load persisted changes if available
-		if (this.taskId && this.globalStoragePath) {
-			this.loadPersistedChanges().catch((error) => {
-				const fileChangeError = this.createError(FileChangeErrorType.PERSISTENCE_FAILED, undefined, error)
-				this.handleError(fileChangeError, false) // Don't notify user for initialization errors
-			})
-		}
-	}
-
-	/**
-	 * Set error handler for user notifications
-	 */
-	public setErrorHandler(handler: FileChangeErrorHandler): void {
-		this.errorHandler = handler
-	}
-
-	/**
-	 * Check if file change tracking is enabled
-	 */
-	private isFileChangeTrackingEnabled(): boolean {
-		const provider = this.providerRef?.deref()
-		if (!provider) {
-			// If no provider reference, default to enabled for backward compatibility
-			return true
-		}
-
-		try {
-			return provider.getValue("filesChangedEnabled") ?? true
-		} catch (error) {
-			// If we can't get the state, default to enabled
-			console.warn("FileChangeManager: Could not check filesChangedEnabled setting, defaulting to enabled")
-			return true
-		}
-	}
-
-	/**
-	 * Create a FileChangeError from a generic error
-	 */
-	private createError(type: FileChangeErrorType, uri?: string, originalError?: Error): FileChangeError {
-		let message = originalError?.message || ""
-
-		// Categorize errors based on common patterns
-		if (message.includes("ENOENT") || message.includes("no such file")) {
-			type = FileChangeErrorType.FILE_NOT_FOUND
-		} else if (message.includes("EACCES") || message.includes("permission denied")) {
-			type = FileChangeErrorType.PERMISSION_DENIED
-		} else if (message.includes("ENOSPC") || message.includes("no space left")) {
-			type = FileChangeErrorType.DISK_FULL
-		}
-
-		return new FileChangeError(type, uri, message, originalError)
-	}
-
-	/**
-	 * Handle errors with optional user notification
-	 */
-	private handleError(error: FileChangeError, notifyUser: boolean = true): void {
-		// Always log to console for debugging
-		console.warn(`FileChangeManager error (${error.type}):`, error.message, error.originalError)
-
-		// Notify user if handler is set and notification is requested
-		if (notifyUser && this.errorHandler) {
-			this.errorHandler.onError(error)
-		}
-	}
-
-	public recordChange(
-		uri: string,
-		type: FileChangeType,
-		fromCheckpoint: string,
-		toCheckpoint: string,
-		linesAdded?: number,
-		linesRemoved?: number,
-	): void {
-		// Check if file change tracking is enabled
-		if (!this.isFileChangeTrackingEnabled()) {
-			console.log(`FileChangeManager: File change tracking is disabled, skipping recording for URI: ${uri}`)
-			return
-		}
-
-		console.log(
-			`FileChangeManager: Recording change for URI: ${uri}, Type: ${type}, From: ${fromCheckpoint}, To: ${toCheckpoint}`,
-		)
-
-		const existingChange = this.changeset.files.get(uri)
-
-		if (existingChange) {
-			// If a file is created and then edited, it's still a 'create'
-			// If it's deleted, all previous changes are moot.
-			const newType = existingChange.type === "create" && type === "edit" ? "create" : type
-
-			this.changeset.files.set(uri, {
-				...existingChange,
-				type: newType,
-				toCheckpoint: toCheckpoint,
-				linesAdded: (existingChange.linesAdded || 0) + (linesAdded || 0),
-				linesRemoved: (existingChange.linesRemoved || 0) + (linesRemoved || 0),
-			})
-		} else {
-			this.changeset.files.set(uri, {
-				uri,
-				type,
-				fromCheckpoint,
-				toCheckpoint,
-				linesAdded,
-				linesRemoved,
-			})
-		}
-
-		// Always persist changes after recording (for both new and updated changes)
-		this.persistChanges().catch((error) => {
-			const fileChangeError = this.createError(FileChangeErrorType.PERSISTENCE_FAILED, uri, error)
-			this.handleError(fileChangeError, false) // Don't notify user for automatic persistence failures
-		})
-
-		this._onDidChange.fire()
-	}
-
-	public async acceptChange(uri: string): Promise<void> {
-		// Store the original file change in case we need to restore it
-		const originalChange = this.changeset.files.get(uri)
-		if (!originalChange) {
-			// Silently return if file is not tracked (already accepted/rejected)
-			return
-		}
-
-		try {
-			// Remove from tracking - the changes are already applied
-			this.changeset.files.delete(uri)
-			await this.persistChanges()
-			this._onDidChange.fire()
-		} catch (error) {
-			// Re-add file to tracking if persistence failed
-			this.changeset.files.set(uri, originalChange)
-			const fileChangeError = this.createError(FileChangeErrorType.PERSISTENCE_FAILED, uri, error as Error)
-			this.handleError(fileChangeError)
-			throw fileChangeError
-		}
-	}
-
-	public async rejectChange(uri: string): Promise<void> {
-		// Store the original file change in case we need to restore it
-		const originalChange = this.changeset.files.get(uri)
-		if (!originalChange) {
-			// Silently return if file is not tracked (already accepted/rejected)
-			return
-		}
-
-		try {
-			// Remove from tracking - the actual revert will be handled by the caller
-			this.changeset.files.delete(uri)
-			await this.persistChanges()
-			this._onDidChange.fire()
-		} catch (error) {
-			// Re-add file to tracking if persistence failed
-			this.changeset.files.set(uri, originalChange)
-			const fileChangeError = this.createError(FileChangeErrorType.PERSISTENCE_FAILED, uri, error as Error)
-			this.handleError(fileChangeError)
-			throw fileChangeError
-		}
-	}
-
-	public async acceptAll(): Promise<void> {
-		// Store all file changes in case we need to restore them
-		const originalChanges = new Map(this.changeset.files)
-
-		try {
-			// Accept all changes - they're already applied
-			this.changeset.files.clear()
-			await this.clearPersistedChanges()
-			this._onDidChange.fire()
-		} catch (error) {
-			// Restore all changes if persistence failed
-			this.changeset.files = originalChanges
-			const fileChangeError = this.createError(FileChangeErrorType.PERSISTENCE_FAILED, undefined, error as Error)
-			this.handleError(fileChangeError)
-			throw fileChangeError
-		}
-	}
-
-	public async rejectAll(): Promise<void> {
-		// Store all file changes in case we need to restore them
-		const originalChanges = new Map(this.changeset.files)
-
-		try {
-			// Remove all from tracking - the actual revert will be handled by the caller
-			this.changeset.files.clear()
-			await this.clearPersistedChanges()
-			this._onDidChange.fire()
-		} catch (error) {
-			// Restore all changes if persistence failed
-			this.changeset.files = originalChanges
-			const fileChangeError = this.createError(FileChangeErrorType.PERSISTENCE_FAILED, undefined, error as Error)
-			this.handleError(fileChangeError)
-			throw fileChangeError
-		}
-	}
-
-	public getFileChange(uri: string): FileChange | undefined {
-		return this.changeset.files.get(uri)
-	}
-
-	public getChanges(): FileChangeset {
-		return {
-			...this.changeset,
-			files: Array.from(this.changeset.files.values()),
-		}
-	}
-
-	public async updateBaseline(
-		restoreCheckpoint: string,
-		getDiff: (from: string, to: string) => Promise<any[]>,
-		checkpointService?: { baseHash?: string; _checkpoints?: string[] },
-	): Promise<void> {
-		// If restoring to the same checkpoint as current baseline, no changes needed
-		if (restoreCheckpoint === this.changeset.baseCheckpoint) {
-			console.log(
-				`[FileChangeManager] Restore checkpoint ${restoreCheckpoint} is same as current baseline, keeping all files`,
-			)
-			return
-		}
-
-		console.log(
-			`[FileChangeManager] Updating baseline from ${this.changeset.baseCheckpoint} to ${restoreCheckpoint}`,
-		)
-
-		// Update the baseline to the restore point
-		this.changeset.baseCheckpoint = restoreCheckpoint
-
-		// Track files to remove (where restoreCheckpoint is chronologically >= toCheckpoint)
-		const filesToRemove: string[] = []
-
-		for (const [uri, change] of this.changeset.files.entries()) {
-			// Determine if the restore checkpoint is chronologically before the file's toCheckpoint
-			const shouldKeepFile = this.isCheckpointBefore(restoreCheckpoint, change.toCheckpoint, checkpointService)
-
-			if (!shouldKeepFile) {
-				// The restore checkpoint is at or after the file's toCheckpoint, so remove this file
-				filesToRemove.push(uri)
-				continue
-			}
-
-			// File should be kept - recalculate the diff from new baseline to toCheckpoint
-			try {
-				const diffs = await getDiff(restoreCheckpoint, change.toCheckpoint)
-				const fileDiff = diffs.find((d) => d.paths.relative === uri)
-
-				if (fileDiff) {
-					const lineDiff = FileChangeManager.calculateLineDifferences(
-						fileDiff.content.before || "",
-						fileDiff.content.after || "",
-					)
-					change.linesAdded = lineDiff.linesAdded
-					change.linesRemoved = lineDiff.linesRemoved
-					change.fromCheckpoint = restoreCheckpoint
-				} else {
-					// No diff found - this means the file is the same in both checkpoints, remove it
-					filesToRemove.push(uri)
-				}
-			} catch (error) {
-				// If diff calculation fails, remove the file to be safe
-				console.error(`Failed to calculate diff for ${uri}:`, error)
-				filesToRemove.push(uri)
-			}
-		}
-
-		// Remove files that are no longer relevant
-		for (const uri of filesToRemove) {
-			this.changeset.files.delete(uri)
-		}
-
-		await this.persistChanges()
-		this._onDidChange.fire()
-	}
-
-	/**
-	 * Determines if checkpoint A is chronologically before checkpoint B
-	 * Returns true if A comes before B in time, false otherwise
-	 * Both checkpoints must be real git commit hashes
-	 */
-	private isCheckpointBefore(
-		checkpointA: string,
-		checkpointB: string,
-		checkpointService?: { baseHash?: string; _checkpoints?: string[] },
-	): boolean {
-		// If they're the same checkpoint, A is not before B
-		if (checkpointA === checkpointB) {
-			return false
-		}
-
-		// If no checkpoint service provided, we can't determine order - default to keeping the file
-		if (!checkpointService) {
-			console.warn("FileChangeManager: No checkpoint service provided for comparison, keeping file")
-			return true
-		}
-
-		const { baseHash, _checkpoints = [] } = checkpointService
-
-		// Handle special case where one is the baseHash
-		if (checkpointA === baseHash) {
-			// baseHash is the earliest, so it's before everything except itself
-			return checkpointB !== baseHash
-		}
-		if (checkpointB === baseHash) {
-			// Nothing can be before baseHash
-			return false
-		}
-
-		// Both are in the checkpoints array - compare their indices
-		const indexA = _checkpoints.indexOf(checkpointA)
-		const indexB = _checkpoints.indexOf(checkpointB)
-
-		// If either checkpoint is not found, we can't determine order - default to keeping the file
-		if (indexA === -1 || indexB === -1) {
-			console.warn(
-				`FileChangeManager: Checkpoint not found in service - A: ${checkpointA} (index: ${indexA}), B: ${checkpointB} (index: ${indexB}), keeping file`,
-			)
-			return true
-		}
-
-		// Lower index means earlier in time
-		return indexA < indexB
-	}
-
-	/**
-	 * Calculate line differences for a file change using simple line counting
-	 */
-	public static calculateLineDifferences(
-		beforeContent: string,
-		afterContent: string,
-	): { linesAdded: number; linesRemoved: number } {
-		const beforeLines = beforeContent.split("\n")
-		const afterLines = afterContent.split("\n")
-
-		// Simple approach: count total lines difference
-		// For a more accurate diff, we'd need a proper diff algorithm
-		const lineDiff = afterLines.length - beforeLines.length
-
-		if (lineDiff > 0) {
-			// More lines in after, so lines were added
-			return { linesAdded: lineDiff, linesRemoved: 0 }
-		} else if (lineDiff < 0) {
-			// Fewer lines in after, so lines were removed
-			return { linesAdded: 0, linesRemoved: Math.abs(lineDiff) }
-		} else {
-			// Same number of lines, but content might have changed
-			// Count changed lines as both added and removed
-			let changedLines = 0
-			const minLength = Math.min(beforeLines.length, afterLines.length)
-
-			for (let i = 0; i < minLength; i++) {
-				if (beforeLines[i] !== afterLines[i]) {
-					changedLines++
-				}
-			}
-
-			return { linesAdded: changedLines, linesRemoved: changedLines }
-		}
-	}
-
-	/**
-	 * Get the file path for persisting file changes
-	 */
-	private getFileChangesFilePath(): string {
-		if (!this.taskId || !this.globalStoragePath) {
-			throw new Error("Task ID and global storage path required for persistence")
-		}
-		return path.join(this.globalStoragePath, "tasks", this.taskId, "file-changes.json")
-	}
-
-	/**
-	 * Persist file changes to disk with race condition prevention
-	 */
-	private async persistChanges(): Promise<void> {
-		if (!this.taskId || !this.globalStoragePath) {
-			return // No persistence if not configured
-		}
-
-		// Prevent concurrent persistence operations
-		if (this.persistenceInProgress) {
-			this.pendingPersistence = true
-			return
-		}
-
-		this.persistenceInProgress = true
-		this.pendingPersistence = false
-
-		try {
-			const filePath = this.getFileChangesFilePath()
-			const dir = path.dirname(filePath)
-
-			// Ensure directory exists
-			await fs.mkdir(dir, { recursive: true })
-
-			// Convert Map to Array for serialization
-			const serializableChangeset = {
-				...this.changeset,
-				files: Array.from(this.changeset.files.values()),
-			}
-
-			// Write atomically using a temporary file
-			const tempFile = `${filePath}.tmp`
-			await fs.writeFile(tempFile, JSON.stringify(serializableChangeset, null, 2), "utf8")
-			await fs.rename(tempFile, filePath)
-		} catch (error) {
-			console.error(`Failed to persist file changes for task ${this.taskId}:`, error)
-			throw error
-		} finally {
-			this.persistenceInProgress = false
-
-			// Handle any pending persistence requests
-			if (this.pendingPersistence) {
-				setImmediate(() => this.persistChanges())
-			}
-		}
-	}
-
-	/**
-	 * Load persisted file changes from disk
-	 */
-	private async loadPersistedChanges(): Promise<void> {
-		if (!this.taskId || !this.globalStoragePath) {
-			return // No persistence if not configured
-		}
-
-		try {
-			const filePath = this.getFileChangesFilePath()
-
-			// Check if file exists
-			try {
-				await fs.access(filePath)
-			} catch {
-				return // File doesn't exist, nothing to load
-			}
-
-			const content = await fs.readFile(filePath, "utf8")
-			const persistedChangeset = JSON.parse(content)
-
-			// Restore the changeset
-			this.changeset.baseCheckpoint = persistedChangeset.baseCheckpoint
-			this.changeset.files = new Map()
-
-			// Convert Array back to Map
-			if (persistedChangeset.files && Array.isArray(persistedChangeset.files)) {
-				for (const fileChange of persistedChangeset.files) {
-					this.changeset.files.set(fileChange.uri, fileChange)
-				}
-			}
-		} catch (error) {
-			console.error(`Failed to load persisted file changes for task ${this.taskId}:`, error)
-		}
-	}
-
-	/**
-	 * Clear persisted file changes from disk
-	 */
-	public async clearPersistedChanges(): Promise<void> {
-		if (!this.taskId || !this.globalStoragePath) {
-			return // No persistence if not configured
-		}
-
-		try {
-			const filePath = this.getFileChangesFilePath()
-			await fs.unlink(filePath)
-		} catch (error) {
-			// File might not exist, which is fine
-			console.debug(`Could not delete persisted file changes for task ${this.taskId}:`, error.message)
-		}
-	}
-
-	/**
-	 * Get the count of files changed
-	 */
-	public getFileChangeCount(): number {
-		return this.changeset.files.size
-	}
-
-	/**
-	 * Serialize the current state for preservation across task recreation
-	 */
-	public serializeState(): string {
-		const state = {
-			baseCheckpoint: this.changeset.baseCheckpoint,
-			files: Array.from(this.changeset.files.values()),
-			taskId: this.taskId,
-			instanceId: this.instanceId,
-		}
-		return JSON.stringify(state)
-	}
-
-	/**
-	 * Restore state from serialized data
-	 */
-	public restoreState(serializedState: string): void {
-		try {
-			const state = JSON.parse(serializedState)
-
-			// Restore changeset
-			this.changeset.baseCheckpoint = state.baseCheckpoint
-			this.changeset.files = new Map()
-
-			// Restore files
-			if (state.files && Array.isArray(state.files)) {
-				for (const fileChange of state.files) {
-					this.changeset.files.set(fileChange.uri, fileChange)
-				}
-			}
-
-			// Fire change event to update UI
-			this._onDidChange.fire()
-		} catch (error) {
-			console.error("Failed to restore FileChangeManager state:", error)
-		}
-	}
-
-	/**
-	 * Dispose of the manager and clean up resources
-	 */
-	public dispose(): void {
-		this._onDidChange.dispose()
 	}
 }

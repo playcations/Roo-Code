@@ -564,7 +564,6 @@ export class ClineProvider
 			parentTask,
 			taskNumber: this.clineStack.length + 1,
 			onCreated: (cline: Task) => this.emit("clineCreated", cline),
-			checkpointService: parentTask?.checkpointService,
 			...options,
 		})
 
@@ -1022,6 +1021,40 @@ export class ClineProvider
 							type: "filesChanged",
 							filesChanged: undefined,
 						})
+					}
+					break
+				}
+				case "filesChangedRequest": {
+					console.log("ClineProvider: Handling filesChangedRequest.")
+					const fileChangeManager = this.getFileChangeManager()
+					if (fileChangeManager) {
+						const changeset = fileChangeManager.getChanges()
+						this.postMessageToWebview({
+							type: "filesChanged",
+							filesChanged: changeset.files.length > 0 ? changeset : undefined,
+						})
+					}
+					break
+				}
+				case "filesChangedBaselineUpdate": {
+					console.log("ClineProvider: Handling filesChangedBaselineUpdate.")
+					const fileChangeManager = this.getFileChangeManager()
+					if (fileChangeManager && task.checkpointService && message.baseline) {
+						try {
+							// Update baseline to the specified checkpoint
+							await fileChangeManager.updateBaseline(message.baseline)
+
+							// Send updated state
+							const updatedChangeset = fileChangeManager.getChanges()
+							this.postMessageToWebview({
+								type: "filesChanged",
+								filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
+							})
+
+							console.log(`ClineProvider: Updated baseline to ${message.baseline}`)
+						} catch (error) {
+							console.error("ClineProvider: Failed to update baseline:", error)
+						}
 					}
 					break
 				}
@@ -2033,35 +2066,13 @@ export class ClineProvider
 			const { FileChangeManager } = await import("../../services/file-changes/FileChangeManager")
 			this.globalFileChangeManager = new FileChangeManager(
 				"HEAD", // Initial baseline - will be updated when checkpoint service initializes
-				"global", // Use a global identifier instead of task-specific ID
-				this.context.globalStorageUri.fsPath,
-				this,
 			)
 
-			// Set up event listener for file changes
-			this.webviewDisposables.push(
-				this.globalFileChangeManager.onDidChange(() => {
-					if (this.globalFileChangeManager) {
-						this.postMessageToWebview({
-							type: "filesChanged",
-							filesChanged: this.globalFileChangeManager.getChanges(),
-						})
-					}
-				}),
-			)
+			// Note: Simplified FileChangeManager doesn't have events
+			// File changes will be sent manually when needed
 
-			// Restore saved state if available (from checkpoint restoration)
-			const savedState = (this as any).pendingFileChangeManagerState
-			if (savedState) {
-				try {
-					this.globalFileChangeManager.restoreState(savedState)
-					console.log("[ClineProvider] Restored FileChangeManager state from checkpoint restoration")
-					// Clean up the saved state
-					delete (this as any).pendingFileChangeManagerState
-				} catch (error) {
-					console.error("[ClineProvider] Failed to restore FileChangeManager state:", error)
-				}
-			}
+			// Note: Simplified FileChangeManager doesn't need state persistence
+			// State will be recalculated from checkpoints as needed
 		}
 		return this.globalFileChangeManager
 	}
@@ -2074,14 +2085,7 @@ export class ClineProvider
 			const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
 			if (currentBaseline !== checkpointService.baseHash) {
 				try {
-					await fileChangeManager.updateBaseline(
-						checkpointService.baseHash,
-						(from, to) => checkpointService.getDiff({ from, to }),
-						{
-							baseHash: checkpointService.baseHash,
-							_checkpoints: checkpointService.checkpoints,
-						},
-					)
+					await fileChangeManager.updateBaseline(checkpointService.baseHash)
 					this.log(`[ClineProvider] Synchronized FileChangeManager baseline to ${checkpointService.baseHash}`)
 				} catch (error) {
 					this.log(`[ClineProvider] Failed to synchronize FileChangeManager baseline: ${error}`)

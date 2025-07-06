@@ -2,38 +2,33 @@ import React from "react"
 import { FileChangeset, FileChange } from "@roo-code/types"
 import { useTranslation } from "react-i18next"
 import { useExtensionState } from "@/context/ExtensionStateContext"
+import { vscode } from "@/utils/vscode"
 
-interface FilesChangedOverviewProps {
-	changeset: FileChangeset
-	onViewDiff: (uri: string) => void
-	onAcceptFile: (uri: string) => void
-	onRejectFile: (uri: string) => void
-	onAcceptAll: () => void
-	onRejectAll: () => void
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+interface FilesChangedOverviewProps {}
+
+interface _CheckpointEventData {
+	type: "checkpoint_created" | "checkpoint_restored"
+	checkpoint: string
+	previousCheckpoint?: string
 }
 
 /**
- * FilesChangedOverview displays a collapsible list of file changes with actions.
- * Features performance optimization with virtualization for large file sets (>50 files).
- *
- * @param changeset - The file changeset containing files and base checkpoint
- * @param onViewDiff - Callback to view diff for a specific file
- * @param onAcceptFile - Callback to accept changes for a specific file
- * @param onRejectFile - Callback to reject changes for a specific file
- * @param onAcceptAll - Callback to accept all file changes
- * @param onRejectAll - Callback to reject all file changes
+ * FilesChangedOverview is a self-managing component that listens for checkpoint events
+ * and displays file changes. It manages its own state and communicates with the backend
+ * through VS Code message passing.
  */
-const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
-	changeset,
-	onViewDiff,
-	onAcceptFile,
-	onRejectFile,
-	onAcceptAll,
-	onRejectAll,
-}) => {
+const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 	const { t } = useTranslation()
 	const { filesChangedEnabled } = useExtensionState()
-	const files = changeset.files
+
+	// Self-managed state
+	const [changeset, setChangeset] = React.useState<FileChangeset | null>(null)
+	const [isInitialized, setIsInitialized] = React.useState(false)
+	const [acceptedFiles, setAcceptedFiles] = React.useState<Set<string>>(new Set())
+	const [rejectedFiles, setRejectedFiles] = React.useState<Set<string>>(new Set())
+
+	const files = React.useMemo(() => changeset?.files || [], [changeset?.files])
 	const [isCollapsed, setIsCollapsed] = React.useState(true)
 
 	// Performance optimization: Use virtualization for large file lists
@@ -72,6 +67,103 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
 		}
 	}, [])
 
+	// FCO initialization logic
+	const checkInit = React.useCallback(
+		(baseCheckpoint: string) => {
+			if (!isInitialized) {
+				console.log("[FCO] Initializing with base checkpoint:", baseCheckpoint)
+				setIsInitialized(true)
+			}
+		},
+		[isInitialized],
+	)
+
+	// Update changeset, filtering out accepted/rejected files
+	const updateChangeset = React.useCallback(
+		(newChangeset: FileChangeset) => {
+			const filteredFiles = newChangeset.files.filter(
+				(file) => !acceptedFiles.has(file.uri) && !rejectedFiles.has(file.uri),
+			)
+
+			setChangeset({
+				...newChangeset,
+				files: filteredFiles,
+			})
+		},
+		[acceptedFiles, rejectedFiles],
+	)
+
+	// Handle checkpoint creation
+	const handleCheckpointCreated = React.useCallback(
+		(checkpoint: string, previousCheckpoint?: string) => {
+			if (!isInitialized) {
+				checkInit(previousCheckpoint || checkpoint)
+			}
+			// Request updated file changes from backend
+			vscode.postMessage({ type: "filesChangedRequest" })
+		},
+		[isInitialized, checkInit],
+	)
+
+	// Handle checkpoint restoration with the 4 examples logic
+	const handleCheckpointRestored = React.useCallback(
+		(restoredCheckpoint: string) => {
+			console.log("[FCO] Handling checkpoint restore to:", restoredCheckpoint)
+
+			if (!changeset) {
+				// If no changeset, just request current state
+				vscode.postMessage({ type: "filesChangedRequest" })
+				return
+			}
+
+			// Update baseline and request recalculated changes
+			vscode.postMessage({
+				type: "filesChangedBaselineUpdate",
+				baseline: restoredCheckpoint,
+			})
+		},
+		[changeset],
+	)
+
+	// Action handlers
+	const handleViewDiff = React.useCallback((uri: string) => {
+		vscode.postMessage({ type: "viewDiff", uri })
+	}, [])
+
+	const handleAcceptFile = React.useCallback((uri: string) => {
+		setAcceptedFiles((prev) => new Set(prev).add(uri))
+		vscode.postMessage({ type: "acceptFileChange", uri })
+	}, [])
+
+	const handleRejectFile = React.useCallback((uri: string) => {
+		setRejectedFiles((prev) => new Set(prev).add(uri))
+		vscode.postMessage({ type: "rejectFileChange", uri })
+	}, [])
+
+	const handleAcceptAll = React.useCallback(() => {
+		if (changeset) {
+			const allUris = changeset.files.map((f) => f.uri)
+			setAcceptedFiles((prev) => {
+				const newSet = new Set(prev)
+				allUris.forEach((uri) => newSet.add(uri))
+				return newSet
+			})
+		}
+		vscode.postMessage({ type: "acceptAllFileChanges" })
+	}, [changeset])
+
+	const handleRejectAll = React.useCallback(() => {
+		if (changeset) {
+			const allUris = changeset.files.map((f) => f.uri)
+			setRejectedFiles((prev) => {
+				const newSet = new Set(prev)
+				allUris.forEach((uri) => newSet.add(uri))
+				return newSet
+			})
+		}
+		vscode.postMessage({ type: "rejectAllFileChanges" })
+	}, [changeset])
+
 	const handleWithDebounce = React.useCallback(
 		async (operation: () => void) => {
 			if (isProcessing) return
@@ -103,6 +195,37 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
 		},
 		[shouldVirtualize],
 	)
+
+	// Listen for filesChanged messages from the backend
+	React.useEffect(() => {
+		const handleMessage = (event: MessageEvent) => {
+			const message = event.data
+
+			switch (message.type) {
+				case "filesChanged":
+					if (message.filesChanged) {
+						console.log("[FCO] Received filesChanged message:", message.filesChanged)
+						checkInit(message.filesChanged.baseCheckpoint)
+						updateChangeset(message.filesChanged)
+					} else {
+						// Clear the changeset
+						setChangeset(null)
+					}
+					break
+				case "checkpoint_created":
+					console.log("[FCO] Checkpoint created:", message.checkpoint)
+					handleCheckpointCreated(message.checkpoint, message.previousCheckpoint)
+					break
+				case "checkpoint_restored":
+					console.log("[FCO] Checkpoint restored:", message.checkpoint)
+					handleCheckpointRestored(message.checkpoint)
+					break
+			}
+		}
+
+		window.addEventListener("message", handleMessage)
+		return () => window.removeEventListener("message", handleMessage)
+	}, [checkInit, updateChangeset, handleCheckpointCreated, handleCheckpointRestored])
 
 	/**
 	 * Formats line change counts for display based on file type
@@ -141,8 +264,8 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
 		return parts.length > 0 ? ` (${parts.join(", ")})` : ""
 	}, [files])
 
-	// Don't render if the feature is disabled
-	if (!filesChangedEnabled) {
+	// Don't render if the feature is disabled or no changes to show
+	if (!filesChangedEnabled || !changeset || files.length === 0) {
 		return null
 	}
 
@@ -208,7 +331,7 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
 					onClick={(e) => e.stopPropagation()} // Prevent collapse toggle when clicking buttons
 				>
 					<button
-						onClick={() => handleWithDebounce(onRejectAll)}
+						onClick={() => handleWithDebounce(handleRejectAll)}
 						disabled={isProcessing}
 						tabIndex={0}
 						data-testid="reject-all-button"
@@ -226,7 +349,7 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
 						{t("file-changes:actions.reject_all")}
 					</button>
 					<button
-						onClick={() => handleWithDebounce(onAcceptAll)}
+						onClick={() => handleWithDebounce(handleAcceptAll)}
 						disabled={isProcessing}
 						tabIndex={0}
 						data-testid="accept-all-button"
@@ -265,9 +388,9 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
 										key={file.uri}
 										file={file}
 										formatLineChanges={formatLineChanges}
-										onViewDiff={onViewDiff}
-										onAcceptFile={onAcceptFile}
-										onRejectFile={onRejectFile}
+										onViewDiff={handleViewDiff}
+										onAcceptFile={handleAcceptFile}
+										onRejectFile={handleRejectFile}
 										handleWithDebounce={handleWithDebounce}
 										isProcessing={isProcessing}
 										t={t}
@@ -282,9 +405,9 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = ({
 								key={file.uri}
 								file={file}
 								formatLineChanges={formatLineChanges}
-								onViewDiff={onViewDiff}
-								onAcceptFile={onAcceptFile}
-								onRejectFile={onRejectFile}
+								onViewDiff={handleViewDiff}
+								onAcceptFile={handleAcceptFile}
+								onRejectFile={handleRejectFile}
 								handleWithDebounce={handleWithDebounce}
 								isProcessing={isProcessing}
 								t={t}

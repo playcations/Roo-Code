@@ -17,9 +17,6 @@ import { CheckpointServiceOptions, RepoPerTaskCheckpointService } from "../../se
 import { CheckpointResult } from "../../services/checkpoints/types"
 
 export function getCheckpointService(cline: Task) {
-	if (cline.options.checkpointService) {
-		return cline.options.checkpointService
-	}
 	if (cline.checkpointService) {
 		return cline.checkpointService
 	}
@@ -256,9 +253,23 @@ export async function checkpointSave(cline: Task, force = false, files?: vscode.
 
 	TelemetryService.instance.captureCheckpointCreated(cline.taskId)
 
+	// Get provider for messaging
+	const provider = cline.providerRef.deref()
+
 	// Start the checkpoint process in the background and track it
 	const savePromise = service
 		.saveCheckpoint(`Task: ${cline.taskId}, Time: ${Date.now()}`, { allowEmpty: force, files })
+		.then((result: any) => {
+			// Notify FCO that checkpoint was created
+			if (provider && result) {
+				provider.postMessageToWebview({
+					type: "checkpoint_created",
+					checkpoint: result.commit,
+					previousCheckpoint: service.getCurrentCheckpoint(),
+				} as any)
+			}
+			return result
+		})
 		.catch((err: any) => {
 			console.error("[Task#checkpointSave] caught unexpected error, disabling checkpoints", err)
 			cline.enableCheckpoints = false
@@ -293,22 +304,19 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 
 	const provider = cline.providerRef.deref()
 
-	// Preserve FileChangeManager state before task cancellation
-	let savedFileChangeManagerState: string | undefined
-	const restoreFileChangeManager = provider?.getFileChangeManager()
-	if (restoreFileChangeManager) {
-		try {
-			savedFileChangeManagerState = restoreFileChangeManager.serializeState()
-			console.log("[checkpointRestore] Saved FileChangeManager state before task cancellation")
-		} catch (error) {
-			console.error("[checkpointRestore] Failed to save FileChangeManager state:", error)
-		}
-	}
+	// Note: Simplified FileChangeManager doesn't need state preservation
+	// It will be recalculated after checkpoint restore
 
 	try {
 		await service.restoreCheckpoint(commitHash)
 		TelemetryService.instance.captureCheckpointRestored(cline.taskId)
 		await provider?.postMessageToWebview({ type: "currentCheckpointUpdated", text: commitHash })
+
+		// Notify FCO that checkpoint was restored
+		await provider?.postMessageToWebview({
+			type: "checkpoint_restored",
+			checkpoint: commitHash,
+		} as any)
 
 		if (mode === "restore") {
 			await cline.overwriteApiConversationHistory(cline.apiConversationHistory.filter((m) => !m.ts || m.ts < ts))
@@ -334,10 +342,7 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 			)
 		}
 
-		// Store the saved state in provider context so it can be retrieved after task recreation
-		if (provider && savedFileChangeManagerState) {
-			;(provider as any).pendingFileChangeManagerState = savedFileChangeManagerState
-		}
+		// Note: No need to store state with simplified FileChangeManager
 
 		// The task is already cancelled by the provider beforehand, but we
 		// need to re-init to get the updated messages.

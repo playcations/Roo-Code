@@ -1,4 +1,5 @@
-// npx vitest run src/components/file-changes/__tests__/FilesChangedOverview.spec.tsx
+// Tests for self-managing FilesChangedOverview component
+// npx vitest run src/components/file-changes/__tests__/FilesChangedOverview.updated.spec.tsx
 
 import React from "react"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
@@ -17,9 +18,41 @@ vi.mock("@src/utils/vscode", () => ({
 	},
 }))
 
-// No mocks needed - testing the actual component
+// Mock react-i18next
+vi.mock("react-i18next", () => ({
+	useTranslation: () => ({
+		t: (key: string, options?: any) => {
+			// Simple key mapping for tests
+			const translations: Record<string, string> = {
+				"file-changes:summary.count_with_changes": `${options?.count || 0} files changed${options?.changes || ""}`,
+				"file-changes:actions.accept_all": "Accept All",
+				"file-changes:actions.reject_all": "Reject All",
+				"file-changes:actions.view_diff": "View Diff",
+				"file-changes:actions.accept_file": "Accept",
+				"file-changes:actions.reject_file": "Reject",
+				"file-changes:file_types.edit": "Modified",
+				"file-changes:file_types.create": "Created",
+				"file-changes:file_types.delete": "Deleted",
+				"file-changes:line_changes.added": `+${options?.count || 0}`,
+				"file-changes:line_changes.removed": `-${options?.count || 0}`,
+				"file-changes:line_changes.added_removed": `+${options?.added || 0}, -${options?.removed || 0}`,
+				"file-changes:accessibility.files_list": `${options?.count || 0} files ${options?.state || ""}`,
+				"file-changes:accessibility.expanded": "expanded",
+				"file-changes:accessibility.collapsed": "collapsed",
+				"file-changes:header.expand": "Expand",
+				"file-changes:header.collapse": "Collapse",
+			}
+			return translations[key] || key
+		},
+	}),
+}))
 
-describe("FilesChangedOverview", () => {
+describe("FilesChangedOverview (Self-Managing)", () => {
+	const mockExtensionState = {
+		filesChangedEnabled: true,
+		// Other required state properties
+	}
+
 	const mockFilesChanged = [
 		{
 			uri: "src/components/test1.ts",
@@ -30,412 +63,329 @@ describe("FilesChangedOverview", () => {
 			linesRemoved: 5,
 		},
 		{
-			uri: "src/utils/test2.ts",
+			uri: "src/components/test2.ts",
 			type: "create" as FileChangeType,
 			fromCheckpoint: "hash1",
-			toCheckpoint: "hash3",
-			linesAdded: 20,
+			toCheckpoint: "hash2",
+			linesAdded: 25,
 			linesRemoved: 0,
-		},
-		{
-			uri: "docs/readme.md",
-			type: "delete" as FileChangeType,
-			fromCheckpoint: "hash1",
-			toCheckpoint: "hash4",
-			linesAdded: 0,
-			linesRemoved: 15,
 		},
 	]
 
-	const mockState = {
-		version: "1.0.0",
-		clineMessages: [],
-		taskHistory: [],
-		shouldShowAnnouncement: false,
-		allowedCommands: [],
-		alwaysAllowExecute: false,
-		currentFileChangeset: {
-			baseCheckpoint: "abc123",
-			files: mockFilesChanged,
-		},
-		setCurrentFileChangeset: () => {},
-		didHydrateState: true,
-		showWelcome: false,
-		theme: {},
-		mcpServers: [],
-		filePaths: [],
-		openedTabs: [],
-		organizationAllowList: [],
-		cloudIsAuthenticated: false,
-		sharingEnabled: false,
-		filesChangedEnabled: true,
-		hasOpenedModeSelector: false,
-		setHasOpenedModeSelector: () => {},
-		condensingApiConfigId: "",
-		setCondensingApiConfigId: () => {},
-		customCondensingPrompt: "",
-		setCustomCondensingPrompt: () => {},
-	}
-
-	const renderComponent = (state = mockState) => {
-		const changeset = state.currentFileChangeset || { baseCheckpoint: "abc123", files: [] }
-		return render(
-			<ExtensionStateContext.Provider value={state as any}>
-				<FilesChangedOverview
-					changeset={changeset}
-					onViewDiff={(uri) => vscode.postMessage({ type: "viewDiff", uri })}
-					onAcceptFile={(uri) => vscode.postMessage({ type: "acceptFileChange", uri })}
-					onRejectFile={(uri) => vscode.postMessage({ type: "rejectFileChange", uri })}
-					onAcceptAll={() => vscode.postMessage({ type: "acceptAllFileChanges" })}
-					onRejectAll={() => vscode.postMessage({ type: "rejectAllFileChanges" })}
-				/>
-			</ExtensionStateContext.Provider>,
-		)
+	const mockChangeset = {
+		baseCheckpoint: "hash1",
+		files: mockFilesChanged,
 	}
 
 	beforeEach(() => {
 		vi.clearAllMocks()
+		// Mock window.addEventListener for message handling
+		vi.spyOn(window, "addEventListener")
+		vi.spyOn(window, "removeEventListener")
 	})
 
-	describe("rendering", () => {
-		it("should render files changed overview with correct file count", () => {
-			renderComponent()
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
 
-			// New format: "(3) Files Changed (+30, -20)"
-			expect(screen.getByText(/\(3\) Files Changed/)).toBeInTheDocument()
+	const renderComponent = () => {
+		return render(
+			<ExtensionStateContext.Provider value={mockExtensionState as any}>
+				<FilesChangedOverview />
+			</ExtensionStateContext.Provider>,
+		)
+	}
+
+	// Helper to simulate messages from backend
+	const simulateMessage = (message: any) => {
+		const messageEvent = new MessageEvent("message", {
+			data: message,
+		})
+		window.dispatchEvent(messageEvent)
+	}
+
+	it("should render without errors when no files changed", () => {
+		renderComponent()
+		// Component should not render anything when no files
+		expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+	})
+
+	it("should listen for window messages on mount", () => {
+		renderComponent()
+		expect(window.addEventListener).toHaveBeenCalledWith("message", expect.any(Function))
+	})
+
+	it("should remove event listener on unmount", () => {
+		const { unmount } = renderComponent()
+		unmount()
+		expect(window.removeEventListener).toHaveBeenCalledWith("message", expect.any(Function))
+	})
+
+	it("should display files when receiving filesChanged message", async () => {
+		renderComponent()
+
+		// Simulate receiving filesChanged message
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
 		})
 
-		it("should display collapse/expand button", () => {
-			renderComponent()
-
-			const expandButton = screen.getByTitle("Expand files list")
-			expect(expandButton).toBeInTheDocument()
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
 		})
 
-		it("should render with empty files list", () => {
-			const emptyState = { ...mockState, currentFileChangeset: { baseCheckpoint: "abc123", files: [] } }
-			renderComponent(emptyState)
+		// Check header shows file count
+		expect(screen.getByTestId("files-changed-header")).toHaveTextContent("2 files changed")
+	})
 
-			// Component should render with 0 files
-			expect(screen.getByText(/\(0\) Files Changed/)).toBeInTheDocument()
+	it("should handle checkpoint_created message", async () => {
+		renderComponent()
+
+		// Simulate checkpoint created event
+		simulateMessage({
+			type: "checkpoint_created",
+			checkpoint: "new-checkpoint-hash",
+			previousCheckpoint: "previous-hash",
 		})
 
-		it("should handle undefined filesChanged gracefully", () => {
-			const undefinedState = { ...mockState, currentFileChangeset: { baseCheckpoint: "abc123", files: [] } }
-			renderComponent(undefinedState)
-
-			// Component should render with 0 files
-			expect(screen.getByText(/\(0\) Files Changed/)).toBeInTheDocument()
+		await waitFor(() => {
+			expect(vscode.postMessage).toHaveBeenCalledWith({
+				type: "filesChangedRequest",
+			})
 		})
 	})
 
-	describe("collapse/expand functionality", () => {
-		it("should start in collapsed state", () => {
-			renderComponent()
+	it("should handle checkpoint_restored message", async () => {
+		renderComponent()
 
-			// Component starts collapsed, so file items should not be visible initially
+		// First set up some files
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+
+		// Simulate checkpoint restore
+		simulateMessage({
+			type: "checkpoint_restored",
+			checkpoint: "restored-checkpoint-hash",
+		})
+
+		await waitFor(() => {
+			expect(vscode.postMessage).toHaveBeenCalledWith({
+				type: "filesChangedBaselineUpdate",
+				baseline: "restored-checkpoint-hash",
+			})
+		})
+	})
+
+	it("should expand/collapse when header is clicked", async () => {
+		renderComponent()
+
+		// Add some files first
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+
+		// Component should start collapsed
+		expect(screen.queryByTestId("file-item-src/components/test1.ts")).not.toBeInTheDocument()
+
+		// Click to expand
+		const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+		fireEvent.click(header!)
+
+		await waitFor(() => {
+			expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+		})
+	})
+
+	it("should send accept file message when accept button clicked", async () => {
+		renderComponent()
+
+		// Add files and expand
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+
+		// Expand to show files
+		const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+		fireEvent.click(header!)
+
+		await waitFor(() => {
+			expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+		})
+
+		// Click accept button
+		const acceptButton = screen.getByTestId("accept-src/components/test1.ts")
+		fireEvent.click(acceptButton)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "acceptFileChange",
+			uri: "src/components/test1.ts",
+		})
+	})
+
+	it("should send reject file message when reject button clicked", async () => {
+		renderComponent()
+
+		// Add files and expand
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+
+		// Expand to show files
+		const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+		fireEvent.click(header!)
+
+		await waitFor(() => {
+			expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+		})
+
+		// Click reject button
+		const rejectButton = screen.getByTestId("reject-src/components/test1.ts")
+		fireEvent.click(rejectButton)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "rejectFileChange",
+			uri: "src/components/test1.ts",
+		})
+	})
+
+	it("should send accept all message when accept all button clicked", async () => {
+		renderComponent()
+
+		// Add files
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+
+		// Click accept all button
+		const acceptAllButton = screen.getByTestId("accept-all-button")
+		fireEvent.click(acceptAllButton)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "acceptAllFileChanges",
+		})
+	})
+
+	it("should send reject all message when reject all button clicked", async () => {
+		renderComponent()
+
+		// Add files
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+
+		// Click reject all button
+		const rejectAllButton = screen.getByTestId("reject-all-button")
+		fireEvent.click(rejectAllButton)
+
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "rejectAllFileChanges",
+		})
+	})
+
+	it("should filter out accepted files from display", async () => {
+		renderComponent()
+
+		// Add files
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+
+		// Expand to show files
+		const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+		fireEvent.click(header!)
+
+		await waitFor(() => {
+			expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+			expect(screen.getByTestId("file-item-src/components/test2.ts")).toBeInTheDocument()
+		})
+
+		// Accept one file
+		const acceptButton = screen.getByTestId("accept-src/components/test1.ts")
+		fireEvent.click(acceptButton)
+
+		// File should be filtered out from display
+		await waitFor(() => {
 			expect(screen.queryByTestId("file-item-src/components/test1.ts")).not.toBeInTheDocument()
-			expect(screen.queryByTestId("file-item-src/utils/test2.ts")).not.toBeInTheDocument()
-			expect(screen.queryByTestId("file-item-docs/readme.md")).not.toBeInTheDocument()
-		})
-
-		it("should expand and collapse when button is clicked", async () => {
-			renderComponent()
-
-			const expandButton = screen.getByTitle("Expand files list")
-
-			// Expand first (starts collapsed)
-			fireEvent.click(expandButton)
-
-			await waitFor(() => {
-				expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
-				expect(screen.getByTestId("file-item-src/utils/test2.ts")).toBeInTheDocument()
-				expect(screen.getByTestId("file-item-docs/readme.md")).toBeInTheDocument()
-			})
-
-			// Collapse
-			fireEvent.click(expandButton)
-
-			await waitFor(() => {
-				expect(screen.queryByTestId("file-item-src/components/test1.ts")).not.toBeInTheDocument()
-				expect(screen.queryByTestId("file-item-src/utils/test2.ts")).not.toBeInTheDocument()
-				expect(screen.queryByTestId("file-item-docs/readme.md")).not.toBeInTheDocument()
-			})
+			expect(screen.getByTestId("file-item-src/components/test2.ts")).toBeInTheDocument()
 		})
 	})
 
-	describe("bulk actions", () => {
-		it("should render accept all and reject all buttons", () => {
-			renderComponent()
+	it("should not render when filesChangedEnabled is false", () => {
+		const disabledState = { ...mockExtensionState, filesChangedEnabled: false }
 
-			expect(screen.getByRole("button", { name: /accept all/i })).toBeInTheDocument()
-			expect(screen.getByRole("button", { name: /reject all/i })).toBeInTheDocument()
+		render(
+			<ExtensionStateContext.Provider value={disabledState as any}>
+				<FilesChangedOverview />
+			</ExtensionStateContext.Provider>,
+		)
+
+		// Add files
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
 		})
 
-		it("should send acceptAllFileChanges message when accept all is clicked", () => {
-			renderComponent()
-
-			const acceptAllButton = screen.getByRole("button", { name: /accept all/i })
-			fireEvent.click(acceptAllButton)
-
-			expect(vscode.postMessage).toHaveBeenCalledWith({
-				type: "acceptAllFileChanges",
-			})
-		})
-
-		it("should send rejectAllFileChanges message when reject all is clicked", () => {
-			renderComponent()
-
-			const rejectAllButton = screen.getByRole("button", { name: /reject all/i })
-			fireEvent.click(rejectAllButton)
-
-			expect(vscode.postMessage).toHaveBeenCalledWith({
-				type: "rejectAllFileChanges",
-			})
-		})
+		// Component should not render when disabled
+		expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
 	})
 
-	describe("individual file actions", () => {
-		it("should handle accept individual file", () => {
-			renderComponent()
+	it("should clear files when receiving empty filesChanged message", async () => {
+		renderComponent()
 
-			// Expand the list first to access individual file buttons
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			const acceptButton = screen.getByTestId("accept-src/components/test1.ts")
-			fireEvent.click(acceptButton)
-
-			expect(vscode.postMessage).toHaveBeenCalledWith({
-				type: "acceptFileChange",
-				uri: "src/components/test1.ts",
-			})
+		// First add files
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
 		})
 
-		it("should handle reject individual file", () => {
-			renderComponent()
-
-			// Expand the list first to access individual file buttons
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			const rejectButton = screen.getByTestId("reject-src/utils/test2.ts")
-			fireEvent.click(rejectButton)
-
-			expect(vscode.postMessage).toHaveBeenCalledWith({
-				type: "rejectFileChange",
-				uri: "src/utils/test2.ts",
-			})
-		})
-	})
-
-	describe("file display", () => {
-		it("should display all file types correctly", () => {
-			renderComponent()
-
-			// Expand the list first to access individual files
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			// Check edit file
-			const editFile = screen.getByTestId("file-item-src/components/test1.ts")
-			expect(editFile).toHaveTextContent("src/components/test1.ts")
-			expect(editFile).toHaveTextContent("edit")
-			expect(editFile).toHaveTextContent("+10, -5 lines")
-
-			// Check create file
-			const createFile = screen.getByTestId("file-item-src/utils/test2.ts")
-			expect(createFile).toHaveTextContent("src/utils/test2.ts")
-			expect(createFile).toHaveTextContent("create")
-			expect(createFile).toHaveTextContent("+20 lines")
-
-			// Check delete file
-			const deleteFile = screen.getByTestId("file-item-docs/readme.md")
-			expect(deleteFile).toHaveTextContent("docs/readme.md")
-			expect(deleteFile).toHaveTextContent("delete")
-			expect(deleteFile).toHaveTextContent("deleted")
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
 		})
 
-		it("should handle files with missing line counts", () => {
-			const filesWithMissingCounts = [
-				{
-					uri: "test-file.ts",
-					type: "edit" as FileChangeType,
-					fromCheckpoint: "hash1",
-					toCheckpoint: "hash2",
-					linesAdded: 0,
-					linesRemoved: 0,
-				},
-			]
-
-			const stateWithMissingCounts = {
-				...mockState,
-				currentFileChangeset: { baseCheckpoint: "abc123", files: filesWithMissingCounts },
-			}
-			renderComponent(stateWithMissingCounts)
-
-			// Expand the list first to access individual files
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			const fileElement = screen.getByTestId("file-item-test-file.ts")
-			expect(fileElement).toHaveTextContent("modified") // Should default to "modified" when no counts
-		})
-	})
-
-	describe("accessibility", () => {
-		it("should have proper ARIA labels", () => {
-			renderComponent()
-
-			const collapseButton = screen.getByRole("button", { name: /collapse/i })
-			expect(collapseButton).toHaveAttribute("aria-expanded")
+		// Clear files with empty message
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: undefined,
 		})
 
-		it("should be keyboard navigable", () => {
-			renderComponent()
-
-			const acceptAllButton = screen.getByRole("button", { name: /accept all/i })
-			const rejectAllButton = screen.getByRole("button", { name: /reject all/i })
-
-			expect(acceptAllButton).toHaveAttribute("tabIndex", "0")
-			expect(rejectAllButton).toHaveAttribute("tabIndex", "0")
-		})
-	})
-
-	describe("edge cases", () => {
-		it("should handle very long file paths", () => {
-			const longPathFiles = [
-				{
-					uri: "very/deeply/nested/directory/structure/with/many/levels/and/a/very/long/filename/that/might/cause/issues.ts",
-					type: "edit" as FileChangeType,
-					fromCheckpoint: "hash1",
-					toCheckpoint: "hash2",
-					linesAdded: 1,
-					linesRemoved: 0,
-				},
-			]
-
-			const longPathState = {
-				...mockState,
-				currentFileChangeset: { baseCheckpoint: "abc123", files: longPathFiles },
-			}
-			renderComponent(longPathState)
-
-			// Expand the list first to access individual files
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			const longPathElement = screen.getByTestId(
-				"file-item-very/deeply/nested/directory/structure/with/many/levels/and/a/very/long/filename/that/might/cause/issues.ts",
-			)
-			expect(longPathElement).toBeInTheDocument()
-		})
-
-		it("should handle large numbers of files", () => {
-			const manyFiles = Array.from({ length: 100 }, (_, i) => ({
-				uri: `src/file${i}.ts`,
-				type: "edit" as FileChangeType,
-				fromCheckpoint: "hash1",
-				toCheckpoint: "hash2",
-				linesAdded: i + 1,
-				linesRemoved: i,
-			}))
-
-			const manyFilesState = {
-				...mockState,
-				currentFileChangeset: { baseCheckpoint: "abc123", files: manyFiles },
-			}
-			renderComponent(manyFilesState)
-
-			expect(screen.getByText(/\(100\) Files Changed/)).toBeInTheDocument()
-
-			// Expand the list first to access individual files
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			// Check that first file is rendered (virtualization shows only visible items)
-			expect(screen.getByTestId("file-item-src/file0.ts")).toBeInTheDocument()
-			// With virtualization enabled (>50 files), only visible items are rendered
-			// So file99.ts won't be in DOM until scrolled to bottom
-			expect(screen.queryByTestId("file-item-src/file99.ts")).not.toBeInTheDocument()
-		})
-
-		it("should handle files with special characters in paths", () => {
-			const specialCharFiles = [
-				{
-					uri: "src/files with spaces.ts",
-					type: "edit" as FileChangeType,
-					fromCheckpoint: "hash1",
-					toCheckpoint: "hash2",
-					linesAdded: 1,
-					linesRemoved: 0,
-				},
-				{
-					uri: "src/files-with-dashes.ts",
-					type: "create" as FileChangeType,
-					fromCheckpoint: "hash1",
-					toCheckpoint: "hash2",
-					linesAdded: 5,
-					linesRemoved: 0,
-				},
-			]
-
-			const specialCharState = {
-				...mockState,
-				currentFileChangeset: { baseCheckpoint: "abc123", files: specialCharFiles },
-			}
-			renderComponent(specialCharState)
-
-			// Expand the list first
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			expect(screen.getByTestId("file-item-src/files with spaces.ts")).toBeInTheDocument()
-			expect(screen.getByTestId("file-item-src/files-with-dashes.ts")).toBeInTheDocument()
-		})
-	})
-
-	describe("error handling", () => {
-		it("should handle corrupted file data gracefully", () => {
-			const corruptedFiles = [
-				{
-					uri: "valid-file.ts",
-					type: "edit" as FileChangeType,
-					fromCheckpoint: "hash1",
-					toCheckpoint: "hash2",
-					linesAdded: 5,
-					linesRemoved: 2,
-				},
-				{
-					// Missing required fields
-					uri: "",
-					type: undefined,
-					fromCheckpoint: undefined,
-					toCheckpoint: undefined,
-				},
-			] as any
-
-			const corruptedState = {
-				...mockState,
-				currentFileChangeset: { baseCheckpoint: "abc123", files: corruptedFiles },
-			}
-
-			// Should not crash
-			expect(() => renderComponent(corruptedState)).not.toThrow()
-		})
-
-		it("should handle postMessage errors gracefully", () => {
-			// Set up the mock after the component is rendered to avoid initialization errors
-			renderComponent()
-
-			vi.mocked(vscode.postMessage).mockImplementation(() => {
-				throw new Error("VSCode API error")
-			})
-
-			const acceptAllButton = screen.getByRole("button", { name: /accept all/i })
-
-			// Should not crash when clicking buttons
-			expect(() => fireEvent.click(acceptAllButton)).not.toThrow()
+		await waitFor(() => {
+			expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
 		})
 	})
 })

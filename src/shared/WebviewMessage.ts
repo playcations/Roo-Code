@@ -184,6 +184,8 @@ export interface WebviewMessage {
 		| "switchTab"
 		| "shareTaskSuccess"
 		| "filesChangedEnabled"
+		| "filesChangedRequest"
+		| "filesChangedBaselineUpdate"
 		| "exportMode"
 		| "exportModeResult"
 		| "importMode"
@@ -226,6 +228,7 @@ export interface WebviewMessage {
 	historyPreviewCollapsed?: boolean
 	command?: string // Added for new message types sent from webview
 	uri?: string // Added for file URIs in new message types
+	baseline?: string // For filesChangedBaselineUpdate message
 	filters?: { type?: string; search?: string; tags?: string[] }
 	url?: string // For openExternal
 	mpItem?: MarketplaceItem

@@ -103,6 +103,8 @@ export interface ExtensionMessage {
 		| "indexCleared"
 		| "codebaseIndexConfig"
 		| "filesChanged"
+		| "checkpoint_created"
+		| "checkpoint_restored"
 		| "say" // Added 'say' type here
 		| "marketplaceInstallResult"
 		| "marketplaceData"
@@ -156,6 +158,8 @@ export interface ExtensionMessage {
 	userInfo?: CloudUserInfo
 	organizationAllowList?: OrganizationAllowList
 	filesChanged?: FileChangeset // Added filesChanged property
+	checkpoint?: string // For checkpoint_created and checkpoint_restored messages
+	previousCheckpoint?: string // For checkpoint_created message
 	say?: ClineSay // Added say property
 	tab?: string
 	marketplaceItems?: MarketplaceItem[]

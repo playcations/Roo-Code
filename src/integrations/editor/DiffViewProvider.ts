@@ -180,7 +180,7 @@ export class DiffViewProvider {
 		}
 	}
 
-	async saveChanges(task: Task): Promise<{
+	async saveChanges(): Promise<{
 		newProblemsMessage: string | undefined
 		userEdits: string | undefined
 		finalContent: string | undefined
@@ -201,60 +201,6 @@ export class DiffViewProvider {
 
 		await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: false, preserveFocus: true })
 		await this.closeAllDiffViews()
-
-		// Track this file change in the FileChangeManager when LLM saves edits
-		const provider = task.providerRef.deref()
-		const fileChangeManager = provider?.getFileChangeManager()
-		if (fileChangeManager && task.checkpointService && this.relPath) {
-			try {
-				// Get the baseline checkpoint for this file
-				const changeset = fileChangeManager.getChanges()
-				const fromCheckpoint = changeset.baseCheckpoint
-
-				// Create a checkpoint to capture the new state
-				const fileUri = vscode.Uri.file(path.join(task.cwd, this.relPath))
-				await checkpointSave(task, false, [fileUri])
-				const newCheckpoint = task.checkpointService.getCurrentCheckpoint()
-
-				if (newCheckpoint) {
-					// Calculate line differences
-					const lineDiff = (
-						await import("../../services/file-changes/FileChangeManager")
-					).FileChangeManager.calculateLineDifferences(this.originalContent || "", editedContent)
-
-					// Determine change type
-					const changeType = this.editType === "create" ? "create" : "edit"
-
-					// Record the file change now that we have the `to` checkpoint
-					fileChangeManager.recordChange(
-						this.relPath,
-						changeType,
-						fromCheckpoint,
-						newCheckpoint,
-						lineDiff.linesAdded,
-						lineDiff.linesRemoved,
-					)
-
-					// Notify the webview about the file changes (only if tracking is enabled)
-					const filesChangedEnabled = provider?.getValue("filesChangedEnabled") ?? true
-					if (provider && filesChangedEnabled) {
-						const updatedChangeset = fileChangeManager.getChanges()
-						if (updatedChangeset.files.length > 0) {
-							provider.postMessageToWebview({
-								type: "filesChanged",
-								filesChanged: updatedChangeset,
-							})
-						}
-					}
-
-					console.log(
-						`[DiffViewProvider] Recorded file change for ${this.relPath}: ${changeType}, lines +${lineDiff.linesAdded}/-${lineDiff.linesRemoved}`,
-					)
-				}
-			} catch (error) {
-				console.warn(`[DiffViewProvider] Failed to track file change for ${this.relPath}:`, error)
-			}
-		}
 
 		// Getting diagnostics before and after the file edit is a better approach than
 		// automatically tracking problems in real-time. This method ensures we only

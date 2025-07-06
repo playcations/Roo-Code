@@ -103,7 +103,6 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 		historyPreviewCollapsed, // Added historyPreviewCollapsed
 		soundEnabled,
 		soundVolume,
-		currentFileChangeset,
 	} = useExtensionState()
 
 	const messagesRef = useRef(messages)
@@ -1473,18 +1472,9 @@ const ChatViewComponent: React.ForwardRefRenderFunction<ChatViewRef, ChatViewPro
 						</div>
 					)}
 
-					{currentFileChangeset && currentFileChangeset.files && currentFileChangeset.files.length > 0 && (
-						<div className="px-3">
-							<FilesChangedOverview
-								changeset={currentFileChangeset}
-								onViewDiff={(uri) => vscode.postMessage({ type: "viewDiff", uri })}
-								onAcceptFile={(uri) => vscode.postMessage({ type: "acceptFileChange", uri })}
-								onRejectFile={(uri) => vscode.postMessage({ type: "rejectFileChange", uri })}
-								onAcceptAll={() => vscode.postMessage({ type: "acceptAllFileChanges" })}
-								onRejectAll={() => vscode.postMessage({ type: "rejectAllFileChanges" })}
-							/>
-						</div>
-					)}
+					<div className="px-3">
+						<FilesChangedOverview />
+					</div>
 				</>
 			) : (
 				<div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-4 relative">

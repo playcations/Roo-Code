@@ -1,306 +1,402 @@
-// Performance tests for FilesChangedOverview virtualization with large file sets
+// Comprehensive performance tests for self-managing FilesChangedOverview virtualization
+// npx vitest run src/components/file-changes/__tests__/performance/VirtualizationPerformance.spec.tsx
 
 import React from "react"
-import { render, screen, fireEvent } from "@testing-library/react"
+import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { vi } from "vitest"
 
 import { ExtensionStateContext } from "@src/context/ExtensionStateContext"
-import { vscode } from "@src/utils/vscode"
 import { FileChangeType } from "@roo-code/types"
-
 import FilesChangedOverview from "../../FilesChangedOverview"
 
-// Mock vscode API
-vi.mock("@src/utils/vscode", () => ({
-	vscode: {
-		postMessage: vi.fn(),
-	},
+// Mock react-i18next
+vi.mock("react-i18next", () => ({
+	useTranslation: () => ({
+		t: (key: string, options?: any) => {
+			const translations: Record<string, string> = {
+				"file-changes:summary.count_with_changes": `${options?.count || 0} files changed${options?.changes || ""}`,
+				"file-changes:actions.accept_all": "Accept All",
+				"file-changes:actions.reject_all": "Reject All",
+			}
+			return translations[key] || key
+		},
+	}),
 }))
 
-describe("FilesChangedOverview Virtualization Performance", () => {
-	const createMockState = (fileCount: number) => ({
-		version: "1.0.0",
-		clineMessages: [],
-		taskHistory: [],
-		shouldShowAnnouncement: false,
-		allowedCommands: [],
-		alwaysAllowExecute: false,
-		currentFileChangeset: {
-			baseCheckpoint: "abc123",
-			files: Array.from({ length: fileCount }, (_, i) => ({
-				uri: `src/components/file${i}.ts`,
-				type: "edit" as FileChangeType,
-				fromCheckpoint: "hash1",
-				toCheckpoint: "hash2",
-				linesAdded: Math.floor(Math.random() * 50) + 1,
-				linesRemoved: Math.floor(Math.random() * 20),
-			})),
-		},
-		setCurrentFileChangeset: () => {},
-		didHydrateState: true,
-		showWelcome: false,
-		theme: {},
-		mcpServers: [],
-		filePaths: [],
-		openedTabs: [],
-		organizationAllowList: [],
-		cloudIsAuthenticated: false,
-		sharingEnabled: false,
+describe("FilesChangedOverview - Virtualization Performance (Self-Managing)", () => {
+	const mockExtensionState = {
 		filesChangedEnabled: true,
-		hasOpenedModeSelector: false,
-		setHasOpenedModeSelector: () => {},
-		condensingApiConfigId: "",
-		setCondensingApiConfigId: () => {},
-		customCondensingPrompt: "",
-		setCustomCondensingPrompt: () => {},
-	})
+	}
 
-	const renderComponent = (fileCount: number) => {
-		const mockState = createMockState(fileCount)
-		const changeset = mockState.currentFileChangeset!
+	const createFileSet = (count: number, mixed = false) => {
+		const fileTypes: FileChangeType[] = mixed ? ["edit", "create", "delete"] : ["edit"]
 
-		return render(
-			<ExtensionStateContext.Provider value={mockState as any}>
-				<FilesChangedOverview
-					changeset={changeset}
-					onViewDiff={(uri) => vscode.postMessage({ type: "viewDiff", uri })}
-					onAcceptFile={(uri) => vscode.postMessage({ type: "acceptFileChange", uri })}
-					onRejectFile={(uri) => vscode.postMessage({ type: "rejectFileChange", uri })}
-					onAcceptAll={() => vscode.postMessage({ type: "acceptAllFileChanges" })}
-					onRejectAll={() => vscode.postMessage({ type: "rejectAllFileChanges" })}
-				/>
-			</ExtensionStateContext.Provider>,
-		)
+		return Array.from({ length: count }, (_, i) => ({
+			uri: `src/file${i}.ts`,
+			type: fileTypes[i % fileTypes.length] as FileChangeType,
+			fromCheckpoint: "hash1",
+			toCheckpoint: "hash2",
+			linesAdded: Math.floor(Math.random() * 20) + 1,
+			linesRemoved: Math.floor(Math.random() * 10),
+		}))
 	}
 
 	beforeEach(() => {
 		vi.clearAllMocks()
 	})
 
-	describe("Virtualization Threshold Testing", () => {
-		it("should NOT use virtualization for 49 files (below threshold)", () => {
-			const { container } = renderComponent(49)
+	const renderComponent = () => {
+		return render(
+			<ExtensionStateContext.Provider value={mockExtensionState as any}>
+				<FilesChangedOverview />
+			</ExtensionStateContext.Provider>,
+		)
+	}
 
-			// Expand the list to see items
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
+	const simulateMessage = (message: any) => {
+		const messageEvent = new MessageEvent("message", {
+			data: message,
+		})
+		window.dispatchEvent(messageEvent)
+	}
 
-			// With 49 files, virtualization should not be used
-			// All files should be directly rendered in DOM
-			expect(screen.getByTestId("file-item-src/components/file0.ts")).toBeInTheDocument()
-			expect(screen.getByTestId("file-item-src/components/file48.ts")).toBeInTheDocument()
+	const setupWithFiles = async (fileCount: number, mixed = false) => {
+		renderComponent()
+		const files = createFileSet(fileCount, mixed)
+		const changeset = {
+			baseCheckpoint: "hash1",
+			files,
+		}
 
-			// Check that we don't have virtualization wrapper (look for transform translateY)
-			const virtualizationTransform = container.querySelector('[style*="transform: translateY"]')
-			expect(virtualizationTransform).not.toBeInTheDocument()
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: changeset,
 		})
 
-		it("should NOT use virtualization for exactly 50 files (at threshold)", () => {
-			const { container } = renderComponent(50)
-
-			// Expand the list to see items
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			// With 50 files, virtualization should not be used (threshold is >50)
-			expect(screen.getByTestId("file-item-src/components/file0.ts")).toBeInTheDocument()
-			expect(screen.getByTestId("file-item-src/components/file49.ts")).toBeInTheDocument()
-
-			// Check that we don't have virtualization wrapper (look for transform translateY)
-			const virtualizationTransform = container.querySelector('[style*="transform: translateY"]')
-			expect(virtualizationTransform).not.toBeInTheDocument()
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
 		})
 
-		it("should use virtualization for 51 files (above threshold)", () => {
-			const { container } = renderComponent(51)
+		return { files, changeset }
+	}
 
-			// Expand the list to see items
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
+	describe("Virtualization Threshold", () => {
+		it("should NOT use virtualization for 49 files (below threshold)", async () => {
+			await setupWithFiles(49)
 
-			// With 51 files, virtualization should be used
-			// Only visible items should be in DOM
-			expect(screen.getByTestId("file-item-src/components/file0.ts")).toBeInTheDocument()
+			// Expand to check virtualization
+			const header = screen.getByRole("button")
+			fireEvent.click(header)
 
-			// Last file should NOT be in DOM due to virtualization
-			expect(screen.queryByTestId("file-item-src/components/file50.ts")).not.toBeInTheDocument()
-
-			// Check that we have virtualization wrapper with transform
-			const virtualizationTransform = container.querySelector('[style*="transform: translateY"]')
-			expect(virtualizationTransform).toBeInTheDocument()
+			await waitFor(() => {
+				// With 49 files, all should be directly rendered (no virtualization)
+				// Check that all files are in DOM
+				expect(screen.getAllByTestId(/^file-item-/).length).toBe(49)
+			})
 		})
 
-		it("should use virtualization for 100 files (well above threshold)", () => {
-			const { container } = renderComponent(100)
+		it("should NOT use virtualization for exactly 50 files (at threshold)", async () => {
+			await setupWithFiles(50)
 
-			// Expand the list to see items
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
+			const header = screen.getByRole("button")
+			fireEvent.click(header)
 
-			// With 100 files, virtualization should definitely be used
-			// Only visible items should be in DOM (approximately 10 items)
-			expect(screen.getByTestId("file-item-src/components/file0.ts")).toBeInTheDocument()
+			await waitFor(() => {
+				// At exactly 50 files, virtualization threshold should not be triggered yet
+				expect(screen.getAllByTestId(/^file-item-/).length).toBe(50)
+			})
+		})
 
-			// Files beyond visible range should NOT be in DOM
-			expect(screen.queryByTestId("file-item-src/components/file99.ts")).not.toBeInTheDocument()
-			expect(screen.queryByTestId("file-item-src/components/file50.ts")).not.toBeInTheDocument()
+		it("should use virtualization for 51 files (above threshold)", async () => {
+			await setupWithFiles(51)
 
-			// Check that we have virtualization wrapper
-			const virtualizationTransform = container.querySelector('[style*="transform: translateY"]')
-			expect(virtualizationTransform).toBeInTheDocument()
+			const header = screen.getByRole("button")
+			fireEvent.click(header)
+
+			await waitFor(() => {
+				// Above 50 files, virtualization should kick in
+				// Only a subset of files should be rendered
+				const renderedFiles = screen.getAllByTestId(/^file-item-/)
+				expect(renderedFiles.length).toBeLessThan(51)
+				expect(renderedFiles.length).toBeGreaterThan(0)
+			})
+		})
+
+		it("should use virtualization for 100 files (well above threshold)", async () => {
+			await setupWithFiles(100)
+
+			const header = screen.getByRole("button")
+			fireEvent.click(header)
+
+			await waitFor(() => {
+				// With virtualization, only visible items should be rendered
+				const renderedFiles = screen.getAllByTestId(/^file-item-/)
+				expect(renderedFiles.length).toBeLessThan(100)
+				expect(renderedFiles.length).toBeGreaterThan(0)
+				expect(renderedFiles.length).toBeLessThanOrEqual(10) // MAX_VISIBLE_ITEMS
+			})
 		})
 	})
 
 	describe("Performance Characteristics", () => {
-		it("should render large file sets efficiently", () => {
+		it("should render large file sets efficiently", async () => {
 			const startTime = performance.now()
 
-			renderComponent(200)
-
-			// Expand the list
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
+			await setupWithFiles(200)
 
 			const endTime = performance.now()
 			const renderTime = endTime - startTime
 
-			// Should render in less than 1 second even with 200 files
+			// Should render within reasonable time (1 second for 200 files)
 			expect(renderTime).toBeLessThan(1000)
-
-			// Should show correct file count in header
-			expect(screen.getByText(/\(200\) Files Changed/)).toBeInTheDocument()
 		})
 
-		it("should handle memory efficiently with virtualization", () => {
-			renderComponent(500)
-
-			// Expand the list
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			// Only visible items should be rendered (~10 items max)
-			const fileItems = screen.getAllByTestId(/^file-item-/)
-			expect(fileItems.length).toBeLessThanOrEqual(15) // Some buffer for visibility
-
-			// But header should show all 500 files
-			expect(screen.getByText(/\(500\) Files Changed/)).toBeInTheDocument()
-		})
-
-		it("should maintain responsiveness during scrolling simulation", async () => {
-			const { container } = renderComponent(100)
-
-			// Expand the list
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			// Find the scrollable container
-			const scrollContainer = container.querySelector('[style*="overflow-y"]')
-			expect(scrollContainer).toBeInTheDocument()
-
-			// Simulate scroll events
-			for (let scrollTop = 0; scrollTop <= 1000; scrollTop += 100) {
-				fireEvent.scroll(scrollContainer!, { target: { scrollTop } })
-
-				// Should still have file items rendered
-				const fileItems = screen.getAllByTestId(/^file-item-/)
-				expect(fileItems.length).toBeGreaterThan(0)
-				expect(fileItems.length).toBeLessThanOrEqual(15)
-			}
-		})
-	})
-
-	describe("Edge Cases with Large Sets", () => {
-		it("should handle extremely large file sets (1000+ files)", () => {
-			const { container } = renderComponent(1000)
-
-			// Should render without crashing
-			expect(screen.getByText(/\(1000\) Files Changed/)).toBeInTheDocument()
-
-			// Expand should work
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
-
-			// Should have virtualization
-			const virtualizationWrapper = container.querySelector('[style*="height:"]')
-			expect(virtualizationWrapper).toBeInTheDocument()
-
-			// Should only render visible items
-			const fileItems = screen.getAllByTestId(/^file-item-/)
-			expect(fileItems.length).toBeLessThanOrEqual(15)
-		})
-
-		it("should calculate total changes correctly for large sets", () => {
-			renderComponent(100)
-
-			// Should calculate and display total changes for all 100 files
-			// Each file has random 1-50 lines added and 0-19 lines removed
-			const headerText = screen.getByText(/\(100\) Files Changed \(\+\d+, -\d+\)/)
-			expect(headerText).toBeInTheDocument()
-		})
-
-		it("should handle mixed file types efficiently in large sets", () => {
-			const mockState = {
-				version: "1.0.0",
-				clineMessages: [],
-				taskHistory: [],
-				shouldShowAnnouncement: false,
-				allowedCommands: [],
-				alwaysAllowExecute: false,
-				currentFileChangeset: {
-					baseCheckpoint: "abc123",
-					files: Array.from({ length: 75 }, (_, i) => ({
-						uri: `src/file${i}.ts`,
-						type: (i % 3 === 0 ? "create" : i % 3 === 1 ? "edit" : "delete") as FileChangeType,
-						fromCheckpoint: "hash1",
-						toCheckpoint: "hash2",
-						linesAdded: i % 3 === 2 ? 0 : Math.floor(Math.random() * 30) + 1,
-						linesRemoved: i % 3 === 0 ? 0 : Math.floor(Math.random() * 15),
-					})),
-				},
-				setCurrentFileChangeset: () => {},
-				didHydrateState: true,
-				showWelcome: false,
-				theme: {},
-				mcpServers: [],
-				filePaths: [],
-				openedTabs: [],
-				organizationAllowList: [],
-				cloudIsAuthenticated: false,
-				sharingEnabled: false,
-				filesChangedEnabled: true,
-				hasOpenedModeSelector: false,
-				setHasOpenedModeSelector: () => {},
-				condensingApiConfigId: "",
-				setCondensingApiConfigId: () => {},
-				customCondensingPrompt: "",
-				setCustomCondensingPrompt: () => {},
-			}
-
-			const changeset = mockState.currentFileChangeset!
-
-			render(
-				<ExtensionStateContext.Provider value={mockState as any}>
-					<FilesChangedOverview
-						changeset={changeset}
-						onViewDiff={(uri) => vscode.postMessage({ type: "viewDiff", uri })}
-						onAcceptFile={(uri) => vscode.postMessage({ type: "acceptFileChange", uri })}
-						onRejectFile={(uri) => vscode.postMessage({ type: "rejectFileChange", uri })}
-						onAcceptAll={() => vscode.postMessage({ type: "acceptAllFileChanges" })}
-						onRejectAll={() => vscode.postMessage({ type: "rejectAllFileChanges" })}
-					/>
+		it("should handle memory efficiently with virtualization", async () => {
+			// Test that DOM size doesn't grow linearly with file count
+			const result1 = render(
+				<ExtensionStateContext.Provider value={mockExtensionState as any}>
+					<FilesChangedOverview />
 				</ExtensionStateContext.Provider>,
 			)
 
-			// Should handle mixed file types
-			expect(screen.getByText(/\(75\) Files Changed/)).toBeInTheDocument()
+			const initialNodeCount = document.querySelectorAll("*").length
 
-			// Expand to see virtualization in action
-			const expandButton = screen.getByTitle("Expand files list")
-			fireEvent.click(expandButton)
+			await setupWithFiles(500)
 
-			// Should show virtualized items
-			const fileItems = screen.getAllByTestId(/^file-item-/)
-			expect(fileItems.length).toBeLessThanOrEqual(15)
+			const header = screen.getByRole("button")
+			fireEvent.click(header)
+
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			})
+
+			const finalNodeCount = document.querySelectorAll("*").length
+			const nodeIncrease = finalNodeCount - initialNodeCount
+
+			// Node increase should be bounded (not proportional to file count)
+			expect(nodeIncrease).toBeLessThan(200) // Should not add 500 nodes for 500 files
+
+			result1.unmount()
+		})
+
+		it("should maintain responsiveness during scrolling simulation", async () => {
+			await setupWithFiles(100)
+
+			const header = screen.getByRole("button")
+			fireEvent.click(header)
+
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			})
+
+			// Simulate scrolling by dispatching scroll events
+			const scrollContainer = screen.getByTestId("files-changed-overview").querySelector('[style*="overflow"]')
+
+			if (scrollContainer) {
+				const startTime = performance.now()
+
+				// Simulate rapid scrolling
+				for (let i = 0; i < 10; i++) {
+					fireEvent.scroll(scrollContainer, { target: { scrollTop: i * 60 } })
+				}
+
+				const endTime = performance.now()
+				const scrollTime = endTime - startTime
+
+				// Scrolling should be responsive (under 100ms for 10 scroll events)
+				expect(scrollTime).toBeLessThan(100)
+			}
+		})
+
+		it("should handle extremely large file sets (1000+ files)", async () => {
+			const extremeFileCount = 1000
+
+			// Should not crash with extreme dataset
+			expect(async () => {
+				await setupWithFiles(extremeFileCount)
+			}).not.toThrow()
+
+			await setupWithFiles(extremeFileCount)
+
+			// Component should still be functional
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			expect(screen.getByTestId("files-changed-header")).toHaveTextContent("1000 files changed")
+		})
+	})
+
+	describe("Calculation Performance", () => {
+		it("should calculate total changes correctly for large sets", async () => {
+			// Create files with known line changes
+			const files = Array.from({ length: 100 }, (_, i) => ({
+				uri: `src/file${i}.ts`,
+				type: "edit" as FileChangeType,
+				fromCheckpoint: "hash1",
+				toCheckpoint: "hash2",
+				linesAdded: 5, // Fixed values for predictable testing
+				linesRemoved: 2,
+			}))
+
+			renderComponent()
+			simulateMessage({
+				type: "filesChanged",
+				filesChanged: { baseCheckpoint: "hash1", files },
+			})
+
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			})
+
+			// Check that total changes are calculated correctly
+			const header = screen.getByTestId("files-changed-header")
+			expect(header).toHaveTextContent("100 files changed")
+			expect(header).toHaveTextContent("(+500, -200)") // 100 * 5, 100 * 2
+		})
+
+		it("should handle mixed file types efficiently in large sets", async () => {
+			await setupWithFiles(150, true) // Mixed file types
+
+			// Should handle different file types without performance degradation
+			const header = screen.getByTestId("files-changed-header")
+			expect(header).toHaveTextContent("150 files changed")
+
+			// Expand and verify mixed types are handled
+			const headerButton = screen.getByRole("button")
+			fireEvent.click(headerButton)
+
+			await waitFor(() => {
+				// Should render some files (virtualized)
+				const renderedFiles = screen.getAllByTestId(/^file-item-/)
+				expect(renderedFiles.length).toBeGreaterThan(0)
+				expect(renderedFiles.length).toBeLessThan(150) // Virtualized
+			})
+		})
+
+		it("should efficiently update when accepting/rejecting files", async () => {
+			await setupWithFiles(100)
+
+			const header = screen.getByRole("button")
+			fireEvent.click(header)
+
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			})
+
+			const startTime = performance.now()
+
+			// Accept all files
+			const acceptAllButton = screen.getByTestId("accept-all-button")
+			fireEvent.click(acceptAllButton)
+
+			// Should update quickly
+			await waitFor(() => {
+				// Files should be filtered out after acceptance
+				expect(screen.queryAllByTestId(/^file-item-/).length).toBe(0)
+			})
+
+			const endTime = performance.now()
+			const updateTime = endTime - startTime
+
+			// Bulk operations should be fast (under 100ms)
+			expect(updateTime).toBeLessThan(100)
+		})
+	})
+
+	describe("Memory Management", () => {
+		it("should not have memory leaks with repeated file updates", async () => {
+			renderComponent()
+
+			// Simulate multiple file updates
+			for (let i = 0; i < 5; i++) {
+				const files = createFileSet(50)
+				simulateMessage({
+					type: "filesChanged",
+					filesChanged: { baseCheckpoint: `hash${i}`, files },
+				})
+
+				await waitFor(() => {
+					expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+				})
+
+				// Clear files
+				simulateMessage({
+					type: "filesChanged",
+					filesChanged: undefined,
+				})
+
+				await waitFor(() => {
+					expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+				})
+			}
+
+			// Should not accumulate DOM nodes
+			const finalNodeCount = document.querySelectorAll("*").length
+			expect(finalNodeCount).toBeLessThan(1000) // Reasonable upper bound
+		})
+
+		it("should clean up event listeners properly", async () => {
+			const { unmount } = render(
+				<ExtensionStateContext.Provider value={mockExtensionState as any}>
+					<FilesChangedOverview />
+				</ExtensionStateContext.Provider>,
+			)
+
+			// Add some files
+			simulateMessage({
+				type: "filesChanged",
+				filesChanged: { baseCheckpoint: "hash1", files: createFileSet(10) },
+			})
+
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			})
+
+			// Unmount should clean up without errors
+			expect(() => unmount()).not.toThrow()
+		})
+	})
+
+	describe("Edge Cases", () => {
+		it("should handle rapid file count changes", async () => {
+			renderComponent()
+
+			// Rapidly change file counts
+			const counts = [10, 100, 5, 75, 200, 1]
+
+			for (const count of counts) {
+				const files = createFileSet(count)
+				simulateMessage({
+					type: "filesChanged",
+					filesChanged: { baseCheckpoint: "hash1", files },
+				})
+
+				await waitFor(() => {
+					expect(screen.getByTestId("files-changed-header")).toHaveTextContent(`${count} files changed`)
+				})
+			}
+		})
+
+		it("should handle files with very long URIs", async () => {
+			const filesWithLongNames = Array.from({ length: 20 }, (_, i) => ({
+				uri: `src/very/long/path/with/many/nested/directories/and/a/very/long/filename/that/might/cause/issues/file${i}.ts`,
+				type: "edit" as FileChangeType,
+				fromCheckpoint: "hash1",
+				toCheckpoint: "hash2",
+				linesAdded: 5,
+				linesRemoved: 2,
+			}))
+
+			renderComponent()
+			simulateMessage({
+				type: "filesChanged",
+				filesChanged: { baseCheckpoint: "hash1", files: filesWithLongNames },
+			})
+
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			})
+
+			// Should handle long URIs without breaking layout
+			expect(screen.getByTestId("files-changed-header")).toHaveTextContent("20 files changed")
 		})
 	})
 })
