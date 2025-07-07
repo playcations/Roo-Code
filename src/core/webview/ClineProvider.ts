@@ -1029,11 +1029,74 @@ export class ClineProvider
 					console.log("ClineProvider: Handling filesChangedRequest.")
 					try {
 						const fileChangeManager = this.getFileChangeManager()
-						if (fileChangeManager) {
+						const task = this.getCurrentCline()
+
+						if (fileChangeManager && task?.checkpointService) {
 							const changeset = fileChangeManager.getChanges()
 							console.log(`[DEBUG] FileChangeManager changeset:`, changeset)
 							console.log(`[DEBUG] Files in changeset: ${changeset.files.length}`)
 							console.log(`[DEBUG] Baseline: ${changeset.baseCheckpoint}`)
+
+							// If no files are tracked (e.g., after checkpoint restore), recalculate from checkpoint service
+							if (changeset.files.length === 0 && changeset.baseCheckpoint) {
+								console.log(`[DEBUG] No files tracked, recalculating from checkpoint service`)
+								try {
+									// Get current checkpoint (HEAD of the checkpoint service)
+									const currentCheckpoint = task.checkpointService.getCurrentCheckpoint()
+									if (currentCheckpoint && currentCheckpoint !== changeset.baseCheckpoint) {
+										console.log(
+											`[DEBUG] Recalculating changes from ${changeset.baseCheckpoint} to ${currentCheckpoint}`,
+										)
+
+										// Calculate diff between baseline and current checkpoint
+										const changes = await task.checkpointService.getDiff({
+											from: changeset.baseCheckpoint,
+											to: currentCheckpoint,
+										})
+
+										if (changes && changes.length > 0) {
+											// Convert to FileChange format
+											const fileChanges = changes.map((change: any) => ({
+												uri: change.paths.relative,
+												type: (change.paths.newFile
+													? "create"
+													: change.paths.deletedFile
+														? "delete"
+														: "edit") as any,
+												fromCheckpoint: changeset.baseCheckpoint,
+												toCheckpoint: currentCheckpoint,
+												linesAdded: change.content.after
+													? change.content.after.split("\n").length
+													: 0,
+												linesRemoved: change.content.before
+													? change.content.before.split("\n").length
+													: 0,
+											}))
+
+											console.log(`[DEBUG] Recalculated ${fileChanges.length} file changes`)
+
+											// Update FileChangeManager with recalculated files
+											fileChangeManager.setFiles(fileChanges)
+
+											// Send updated changeset
+											const updatedChangeset = {
+												baseCheckpoint: changeset.baseCheckpoint,
+												files: fileChanges,
+											}
+
+											this.postMessageToWebview({
+												type: "filesChanged",
+												filesChanged: updatedChangeset,
+											})
+											break
+										}
+									}
+								} catch (recalcError) {
+									console.error(`[DEBUG] Error recalculating file changes:`, recalcError)
+									// Fall through to return current (empty) changeset
+								}
+							}
+
 							if (changeset.files.length > 0) {
 								console.log(
 									`[DEBUG] File details:`,
@@ -1045,7 +1108,13 @@ export class ClineProvider
 								filesChanged: changeset.files.length > 0 ? changeset : undefined,
 							})
 						} else {
-							console.log("ClineProvider: FileChangeManager not available for filesChangedRequest")
+							console.log(
+								"ClineProvider: FileChangeManager or task not available for filesChangedRequest",
+							)
+							this.postMessageToWebview({
+								type: "filesChanged",
+								filesChanged: undefined,
+							})
 						}
 					} catch (error) {
 						console.error("ClineProvider: Error handling filesChangedRequest:", error)
@@ -2197,7 +2266,10 @@ export class ClineProvider
 
 			if (fileChangeManager && checkpointService?.baseHash) {
 				const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
-				if (currentBaseline !== checkpointService.baseHash) {
+
+				// Only sync to initial baseline if FileChangeManager is still at default "HEAD"
+				// Don't override baseline that was already set by checkpoint service initialization
+				if (currentBaseline === "HEAD" && currentBaseline !== checkpointService.baseHash) {
 					try {
 						await fileChangeManager.updateBaseline(checkpointService.baseHash)
 						this.log(
@@ -2207,6 +2279,10 @@ export class ClineProvider
 						this.log(`[ClineProvider] Failed to synchronize FileChangeManager baseline: ${error}`)
 						// Don't throw - allow task to continue even if baseline sync fails
 					}
+				} else if (currentBaseline !== "HEAD") {
+					this.log(
+						`[ClineProvider] FileChangeManager baseline already set to ${currentBaseline}, skipping sync to ${checkpointService.baseHash}`,
+					)
 				}
 			}
 		} catch (error) {

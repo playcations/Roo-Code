@@ -25,8 +25,6 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 	// Self-managed state
 	const [changeset, setChangeset] = React.useState<FileChangeset | null>(null)
 	const [isInitialized, setIsInitialized] = React.useState(false)
-	const [acceptedFiles, setAcceptedFiles] = React.useState<Set<string>>(new Set())
-	const [rejectedFiles, setRejectedFiles] = React.useState<Set<string>>(new Set())
 
 	const files = React.useMemo(() => changeset?.files || [], [changeset?.files])
 	const [isCollapsed, setIsCollapsed] = React.useState(true)
@@ -78,20 +76,10 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 		[isInitialized],
 	)
 
-	// Update changeset, filtering out accepted/rejected files
-	const updateChangeset = React.useCallback(
-		(newChangeset: FileChangeset) => {
-			const filteredFiles = newChangeset.files.filter(
-				(file) => !acceptedFiles.has(file.uri) && !rejectedFiles.has(file.uri),
-			)
-
-			setChangeset({
-				...newChangeset,
-				files: filteredFiles,
-			})
-		},
-		[acceptedFiles, rejectedFiles],
-	)
+	// Update changeset - backend handles filtering, no local filtering needed
+	const updateChangeset = React.useCallback((newChangeset: FileChangeset) => {
+		setChangeset(newChangeset)
+	}, [])
 
 	// Handle checkpoint creation
 	const handleCheckpointCreated = React.useCallback(
@@ -99,31 +87,20 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 			if (!isInitialized) {
 				checkInit(previousCheckpoint || checkpoint)
 			}
-			// Request updated file changes from backend
-			vscode.postMessage({ type: "filesChangedRequest" })
+			// Note: Backend automatically sends file changes during checkpoint creation
+			// No need to request them here - just wait for the filesChanged message
 		},
 		[isInitialized, checkInit],
 	)
 
 	// Handle checkpoint restoration with the 4 examples logic
-	const handleCheckpointRestored = React.useCallback(
-		(restoredCheckpoint: string) => {
-			console.log("[FCO] Handling checkpoint restore to:", restoredCheckpoint)
+	const handleCheckpointRestored = React.useCallback((restoredCheckpoint: string) => {
+		console.log("[FCO] Handling checkpoint restore to:", restoredCheckpoint)
 
-			if (!changeset) {
-				// If no changeset, just request current state
-				vscode.postMessage({ type: "filesChangedRequest" })
-				return
-			}
-
-			// Update baseline and request recalculated changes
-			vscode.postMessage({
-				type: "filesChangedBaselineUpdate",
-				baseline: restoredCheckpoint,
-			})
-		},
-		[changeset],
-	)
+		// Request file changes after checkpoint restore
+		// Backend should calculate changes from initial baseline to restored checkpoint
+		vscode.postMessage({ type: "filesChangedRequest" })
+	}, [])
 
 	// Action handlers
 	const handleViewDiff = React.useCallback((uri: string) => {
@@ -131,38 +108,24 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 	}, [])
 
 	const handleAcceptFile = React.useCallback((uri: string) => {
-		setAcceptedFiles((prev) => new Set(prev).add(uri))
 		vscode.postMessage({ type: "acceptFileChange", uri })
+		// Backend will send updated filesChanged message with filtered results
 	}, [])
 
 	const handleRejectFile = React.useCallback((uri: string) => {
-		setRejectedFiles((prev) => new Set(prev).add(uri))
 		vscode.postMessage({ type: "rejectFileChange", uri })
+		// Backend will send updated filesChanged message with filtered results
 	}, [])
 
 	const handleAcceptAll = React.useCallback(() => {
-		if (changeset) {
-			const allUris = changeset.files.map((f) => f.uri)
-			setAcceptedFiles((prev) => {
-				const newSet = new Set(prev)
-				allUris.forEach((uri) => newSet.add(uri))
-				return newSet
-			})
-		}
 		vscode.postMessage({ type: "acceptAllFileChanges" })
-	}, [changeset])
+		// Backend will send updated filesChanged message with filtered results
+	}, [])
 
 	const handleRejectAll = React.useCallback(() => {
-		if (changeset) {
-			const allUris = changeset.files.map((f) => f.uri)
-			setRejectedFiles((prev) => {
-				const newSet = new Set(prev)
-				allUris.forEach((uri) => newSet.add(uri))
-				return newSet
-			})
-		}
 		vscode.postMessage({ type: "rejectAllFileChanges" })
-	}, [changeset])
+		// Backend will send updated filesChanged message with filtered results
+	}, [])
 
 	const handleWithDebounce = React.useCallback(
 		async (operation: () => void) => {

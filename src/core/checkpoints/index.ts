@@ -106,16 +106,30 @@ export function getCheckpointService(cline: Task) {
 				cline.checkpointService = service
 				cline.checkpointServiceInitializing = false
 
-				// Update FileChangeManager baseline to match checkpoint service if it was created with default "HEAD"
+				// Update FileChangeManager baseline to match checkpoint service
 				try {
 					const fileChangeManager = provider?.getFileChangeManager()
-					if (fileChangeManager && service.baseHash) {
+					if (fileChangeManager) {
 						const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
-						if (currentBaseline === "HEAD" && service.baseHash !== "HEAD") {
-							await fileChangeManager.updateBaseline(service.baseHash)
-							log(
-								`[Task#getCheckpointService] Updated FileChangeManager baseline from HEAD to ${service.baseHash}`,
-							)
+						if (currentBaseline === "HEAD") {
+							if (isCheckpointNeeded) {
+								// New task: set baseline to initial checkpoint
+								if (service.baseHash && service.baseHash !== "HEAD") {
+									await fileChangeManager.updateBaseline(service.baseHash)
+									log(
+										`[Task#getCheckpointService] New task: Updated FileChangeManager baseline from HEAD to ${service.baseHash}`,
+									)
+								}
+							} else {
+								// Existing task: set baseline to current checkpoint (HEAD of checkpoint history)
+								const currentCheckpoint = service.getCurrentCheckpoint()
+								if (currentCheckpoint && currentCheckpoint !== "HEAD") {
+									await fileChangeManager.updateBaseline(currentCheckpoint)
+									log(
+										`[Task#getCheckpointService] Existing task: Updated FileChangeManager baseline from HEAD to current checkpoint ${currentCheckpoint}`,
+									)
+								}
+							}
 						}
 					}
 				} catch (error) {
@@ -155,15 +169,17 @@ export function getCheckpointService(cline: Task) {
 				try {
 					const checkpointFileChangeManager = provider?.getFileChangeManager()
 					if (checkpointFileChangeManager) {
-						// Get the old baseline
-						const oldBaseline = checkpointFileChangeManager.getChanges().baseCheckpoint
-						log(`[Task#checkpointCreated] Calculating changes from ${oldBaseline} to ${toHash}`)
+						// Get the initial baseline (preserve for cumulative diff tracking)
+						const initialBaseline = checkpointFileChangeManager.getChanges().baseCheckpoint
+						log(
+							`[Task#checkpointCreated] Calculating cumulative changes from initial baseline ${initialBaseline} to ${toHash}`,
+						)
 
-						// Calculate diff between old baseline and new checkpoint using checkpoint service
-						const changes = await service.getDiff({ from: oldBaseline, to: toHash })
+						// Calculate cumulative diff from initial baseline to new checkpoint using checkpoint service
+						const changes = await service.getDiff({ from: initialBaseline, to: toHash })
 
 						if (changes && changes.length > 0) {
-							// Convert to FileChange format
+							// Convert to FileChange format with correct checkpoint references
 							const fileChanges = changes.map((change: any) => ({
 								uri: change.paths.relative,
 								type: (change.paths.newFile
@@ -171,18 +187,27 @@ export function getCheckpointService(cline: Task) {
 									: change.paths.deletedFile
 										? "delete"
 										: "edit") as FileChangeType,
-								fromCheckpoint: oldBaseline,
-								toCheckpoint: toHash,
+								fromCheckpoint: initialBaseline, // Always reference initial baseline for cumulative view
+								toCheckpoint: toHash, // Current checkpoint for comparison
 								linesAdded: change.content.after ? change.content.after.split("\n").length : 0,
 								linesRemoved: change.content.before ? change.content.before.split("\n").length : 0,
 							}))
 
-							log(`[Task#checkpointCreated] Found ${fileChanges.length} file changes`)
+							log(`[Task#checkpointCreated] Found ${fileChanges.length} cumulative file changes`)
 
-							// Create changeset and send to webview
+							// Update FileChangeManager with the new files so view diff can find them
+							checkpointFileChangeManager.setFiles(fileChanges)
+
+							// DON'T clear accepted/rejected state here - preserve user's accept/reject decisions
+							// The state should only be cleared on baseline changes (checkpoint restore) or task restart
+
+							// Get filtered changeset that excludes already accepted/rejected files
+							const filteredChangeset = checkpointFileChangeManager.getChanges()
+
+							// Create changeset and send to webview (only unaccepted files)
 							const serializableChangeset = {
-								baseCheckpoint: oldBaseline,
-								files: fileChanges,
+								baseCheckpoint: filteredChangeset.baseCheckpoint,
+								files: filteredChangeset.files,
 							}
 
 							provider?.postMessageToWebview({
@@ -190,12 +215,14 @@ export function getCheckpointService(cline: Task) {
 								filesChanged: serializableChangeset,
 							})
 						} else {
-							log(`[Task#checkpointCreated] No changes found between ${oldBaseline} and ${toHash}`)
+							log(`[Task#checkpointCreated] No changes found between ${initialBaseline} and ${toHash}`)
 						}
 
-						// Now update the baseline to the new checkpoint
-						await checkpointFileChangeManager.updateBaseline(toHash)
-						log(`[Task#checkpointCreated] Updated FileChangeManager baseline to ${toHash}`)
+						// DON'T update the baseline - keep it at initial baseline for cumulative tracking
+						// The baseline should only change when explicitly requested (e.g., checkpoint restore)
+						log(
+							`[Task#checkpointCreated] Keeping FileChangeManager baseline at ${initialBaseline} for cumulative tracking`,
+						)
 					}
 				} catch (error) {
 					log(`[Task#checkpointCreated] Error calculating/sending file changes: ${error}`)
