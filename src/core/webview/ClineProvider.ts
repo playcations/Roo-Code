@@ -24,6 +24,7 @@ import {
 	type HistoryItem,
 	type CloudUserInfo,
 	type MarketplaceItem,
+	type FileChangeType,
 	requestyDefaultModelId,
 	openRouterDefaultModelId,
 	glamaDefaultModelId,
@@ -1026,21 +1027,41 @@ export class ClineProvider
 				}
 				case "filesChangedRequest": {
 					console.log("ClineProvider: Handling filesChangedRequest.")
-					const fileChangeManager = this.getFileChangeManager()
-					if (fileChangeManager) {
-						const changeset = fileChangeManager.getChanges()
+					try {
+						const fileChangeManager = this.getFileChangeManager()
+						if (fileChangeManager) {
+							const changeset = fileChangeManager.getChanges()
+							console.log(`[DEBUG] FileChangeManager changeset:`, changeset)
+							console.log(`[DEBUG] Files in changeset: ${changeset.files.length}`)
+							console.log(`[DEBUG] Baseline: ${changeset.baseCheckpoint}`)
+							if (changeset.files.length > 0) {
+								console.log(
+									`[DEBUG] File details:`,
+									changeset.files.map((f) => ({ uri: f.uri, type: f.type })),
+								)
+							}
+							this.postMessageToWebview({
+								type: "filesChanged",
+								filesChanged: changeset.files.length > 0 ? changeset : undefined,
+							})
+						} else {
+							console.log("ClineProvider: FileChangeManager not available for filesChangedRequest")
+						}
+					} catch (error) {
+						console.error("ClineProvider: Error handling filesChangedRequest:", error)
+						// Send empty response to prevent FCO from hanging
 						this.postMessageToWebview({
 							type: "filesChanged",
-							filesChanged: changeset.files.length > 0 ? changeset : undefined,
+							filesChanged: undefined,
 						})
 					}
 					break
 				}
 				case "filesChangedBaselineUpdate": {
 					console.log("ClineProvider: Handling filesChangedBaselineUpdate.")
-					const fileChangeManager = this.getFileChangeManager()
-					if (fileChangeManager && task.checkpointService && message.baseline) {
-						try {
+					try {
+						const fileChangeManager = this.getFileChangeManager()
+						if (fileChangeManager && task.checkpointService && message.baseline) {
 							// Update baseline to the specified checkpoint
 							await fileChangeManager.updateBaseline(message.baseline)
 
@@ -1052,9 +1073,21 @@ export class ClineProvider
 							})
 
 							console.log(`ClineProvider: Updated baseline to ${message.baseline}`)
-						} catch (error) {
-							console.error("ClineProvider: Failed to update baseline:", error)
+						} else {
+							console.log("ClineProvider: Cannot update baseline - missing dependencies")
+							// Send empty response to prevent FCO from hanging
+							this.postMessageToWebview({
+								type: "filesChanged",
+								filesChanged: undefined,
+							})
 						}
+					} catch (error) {
+						console.error("ClineProvider: Failed to update baseline:", error)
+						// Send empty response to prevent FCO from hanging
+						this.postMessageToWebview({
+							type: "filesChanged",
+							filesChanged: undefined,
+						})
 					}
 					break
 				}
@@ -1404,6 +1437,12 @@ export class ClineProvider
 		apiConversationHistory: Anthropic.MessageParam[]
 	}> {
 		const history = this.getGlobalState("taskHistory") ?? []
+
+		// Debug logging to understand what's happening
+		console.log(`[DEBUG] getTaskWithId called with id: ${id}`)
+		console.log(`[DEBUG] taskHistory length: ${history.length}`)
+		console.log(`[DEBUG] taskHistory IDs: ${history.map((h) => h.id).join(", ")}`)
+
 		const historyItem = history.find((item) => item.id === id)
 
 		if (historyItem) {
@@ -1412,7 +1451,10 @@ export class ClineProvider
 			const taskDirPath = await getTaskDirectoryPath(globalStoragePath, id)
 			const apiConversationHistoryFilePath = path.join(taskDirPath, GlobalFileNames.apiConversationHistory)
 			const uiMessagesFilePath = path.join(taskDirPath, GlobalFileNames.uiMessages)
+
+			console.log(`[DEBUG] Checking file existence: ${apiConversationHistoryFilePath}`)
 			const fileExists = await fileExistsAtPath(apiConversationHistoryFilePath)
+			console.log(`[DEBUG] File exists: ${fileExists}`)
 
 			if (fileExists) {
 				const apiConversationHistory = JSON.parse(await fs.readFile(apiConversationHistoryFilePath, "utf8"))
@@ -1424,23 +1466,40 @@ export class ClineProvider
 					uiMessagesFilePath,
 					apiConversationHistory,
 				}
+			} else {
+				console.log(`[DEBUG] Task file does not exist: ${apiConversationHistoryFilePath}`)
 			}
+		} else {
+			console.log(`[DEBUG] Task not found in history. Requested ID: ${id}`)
 		}
 
 		// if we tried to get a task that doesn't exist, remove it from state
 		// FIXME: this seems to happen sometimes when the json file doesnt save to disk for some reason
+		console.log(`[DEBUG] Removing task ${id} from state due to 'Task not found'`)
 		await this.deleteTaskFromState(id)
 		throw new Error("Task not found")
 	}
 
 	async showTaskWithId(id: string) {
-		if (id !== this.getCurrentCline()?.taskId) {
-			// Non-current task.
-			const { historyItem } = await this.getTaskWithId(id)
-			await this.initClineWithHistoryItem(historyItem) // Clears existing task.
-		}
+		try {
+			if (id !== this.getCurrentCline()?.taskId) {
+				// Non-current task.
+				const { historyItem } = await this.getTaskWithId(id)
+				await this.initClineWithHistoryItem(historyItem) // Clears existing task.
+			}
 
-		await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
+			await this.postMessageToWebview({ type: "action", action: "chatButtonClicked" })
+		} catch (error) {
+			console.error(`[ClineProvider] Failed to show task ${id}:`, error)
+
+			// Clean up the UI state by refreshing the task history
+			await this.postStateToWebview()
+
+			// Show user-friendly error message
+			vscode.window.showWarningMessage(
+				`Could not open task. The task may have been deleted or corrupted. Task history has been refreshed.`,
+			)
+		}
 	}
 
 	async exportTaskWithId(id: string) {
@@ -1519,8 +1578,55 @@ export class ClineProvider
 		await this.postStateToWebview()
 	}
 
+	/**
+	 * Validates task history integrity by checking if task files exist on disk.
+	 * Removes tasks that don't have corresponding files to prevent "Task not found" errors.
+	 */
+	private async validateTaskHistoryIntegrity(taskHistory: HistoryItem[]): Promise<HistoryItem[]> {
+		const validTasks: HistoryItem[] = []
+
+		for (const task of taskHistory) {
+			try {
+				const { getTaskDirectoryPath } = await import("../../utils/storage")
+				const globalStoragePath = this.contextProxy.globalStorageUri.fsPath
+				const taskDirPath = await getTaskDirectoryPath(globalStoragePath, task.id)
+				const apiConversationHistoryFilePath = path.join(taskDirPath, GlobalFileNames.apiConversationHistory)
+
+				const fileExists = await fileExistsAtPath(apiConversationHistoryFilePath)
+				if (fileExists) {
+					validTasks.push(task)
+				} else {
+					console.log(
+						`[ClineProvider] Removing stale task ${task.id} from history (file not found: ${apiConversationHistoryFilePath})`,
+					)
+				}
+			} catch (error) {
+				console.log(`[ClineProvider] Removing stale task ${task.id} from history (validation error: ${error})`)
+			}
+		}
+
+		// Update the global state if we found stale tasks
+		if (validTasks.length !== taskHistory.length) {
+			await this.updateGlobalState("taskHistory", validTasks)
+		}
+
+		return validTasks
+	}
+
 	async postStateToWebview() {
 		const state = await this.getStateToPostToWebview()
+
+		// Validate task history integrity before sending to webview
+		if (state.taskHistory && state.taskHistory.length > 0) {
+			const validatedTaskHistory = await this.validateTaskHistoryIntegrity(state.taskHistory)
+			if (validatedTaskHistory.length !== state.taskHistory.length) {
+				console.log(
+					`[ClineProvider] Cleaned up ${state.taskHistory.length - validatedTaskHistory.length} stale task(s) from history`,
+				)
+				state.taskHistory = validatedTaskHistory
+			}
+		}
+
 		this.postMessageToWebview({ type: "state", state })
 
 		// Check MDM compliance and send user to account tab if not compliant
@@ -2078,19 +2184,34 @@ export class ClineProvider
 	}
 
 	private async syncFileChangeManagerWithTask(task: Task) {
-		const fileChangeManager = await this.ensureFileChangeManager()
-		const checkpointService = await getInitializedCheckpointService(task)
+		try {
+			const fileChangeManager = await this.ensureFileChangeManager()
 
-		if (fileChangeManager && checkpointService?.baseHash) {
-			const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
-			if (currentBaseline !== checkpointService.baseHash) {
-				try {
-					await fileChangeManager.updateBaseline(checkpointService.baseHash)
-					this.log(`[ClineProvider] Synchronized FileChangeManager baseline to ${checkpointService.baseHash}`)
-				} catch (error) {
-					this.log(`[ClineProvider] Failed to synchronize FileChangeManager baseline: ${error}`)
+			// Add timeout for checkpoint service initialization to prevent hanging
+			const checkpointService = await Promise.race([
+				getInitializedCheckpointService(task, { timeout: 10000 }),
+				new Promise<undefined>((_, reject) =>
+					setTimeout(() => reject(new Error("Checkpoint service initialization timeout")), 10000),
+				),
+			])
+
+			if (fileChangeManager && checkpointService?.baseHash) {
+				const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
+				if (currentBaseline !== checkpointService.baseHash) {
+					try {
+						await fileChangeManager.updateBaseline(checkpointService.baseHash)
+						this.log(
+							`[ClineProvider] Synchronized FileChangeManager baseline to ${checkpointService.baseHash}`,
+						)
+					} catch (error) {
+						this.log(`[ClineProvider] Failed to synchronize FileChangeManager baseline: ${error}`)
+						// Don't throw - allow task to continue even if baseline sync fails
+					}
 				}
 			}
+		} catch (error) {
+			this.log(`[ClineProvider] FileChangeManager sync failed, continuing with task initialization: ${error}`)
+			// Don't throw - allow task loading to continue even if FCO sync fails
 		}
 	}
 

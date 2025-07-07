@@ -2,6 +2,7 @@ import pWaitFor from "p-wait-for"
 import * as vscode from "vscode"
 
 import { TelemetryService } from "@roo-code/telemetry"
+import { FileChangeType } from "@roo-code/types"
 
 import { Task } from "../task/Task"
 
@@ -106,19 +107,20 @@ export function getCheckpointService(cline: Task) {
 				cline.checkpointServiceInitializing = false
 
 				// Update FileChangeManager baseline to match checkpoint service if it was created with default "HEAD"
-				const fileChangeManager = provider?.getFileChangeManager()
-				if (fileChangeManager && service.baseHash) {
-					const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
-					if (currentBaseline === "HEAD" && service.baseHash !== "HEAD") {
-						try {
-							await fileChangeManager.updateBaseline(service.baseHash, () => Promise.resolve([]))
+				try {
+					const fileChangeManager = provider?.getFileChangeManager()
+					if (fileChangeManager && service.baseHash) {
+						const currentBaseline = fileChangeManager.getChanges().baseCheckpoint
+						if (currentBaseline === "HEAD" && service.baseHash !== "HEAD") {
+							await fileChangeManager.updateBaseline(service.baseHash)
 							log(
 								`[Task#getCheckpointService] Updated FileChangeManager baseline from HEAD to ${service.baseHash}`,
 							)
-						} catch (error) {
-							log(`[Task#getCheckpointService] Failed to update FileChangeManager baseline: ${error}`)
 						}
 					}
+				} catch (error) {
+					log(`[Task#getCheckpointService] Failed to update FileChangeManager baseline: ${error}`)
+					// Don't throw - allow checkpoint service to continue initializing
 				}
 
 				if (isCheckpointNeeded) {
@@ -149,27 +151,54 @@ export function getCheckpointService(cline: Task) {
 					},
 				)
 
-				// FileChangeManager is now created during service initialization
-				// This ensures it exists before any baseline update attempts
-				// File change tracking is now handled at the time of LLM edits in saveChanges(),
-				// not during checkpoint creation. This prevents rejected files from reappearing
-				// when new checkpoints are created.
+				// Calculate changes using checkpoint service directly
+				try {
+					const checkpointFileChangeManager = provider?.getFileChangeManager()
+					if (checkpointFileChangeManager) {
+						// Get the old baseline
+						const oldBaseline = checkpointFileChangeManager.getChanges().baseCheckpoint
+						log(`[Task#checkpointCreated] Calculating changes from ${oldBaseline} to ${toHash}`)
 
-				// Send current file changes to the webview (if any exist)
-				const checkpointFileChangeManager = provider?.getFileChangeManager()
-				if (checkpointFileChangeManager) {
-					const changeset = checkpointFileChangeManager.getChanges()
-					if (changeset.files.length > 0) {
-						const serializableChangeset = {
-							...changeset,
-							files: Array.from(changeset.files.values()),
+						// Calculate diff between old baseline and new checkpoint using checkpoint service
+						const changes = await service.getDiff({ from: oldBaseline, to: toHash })
+
+						if (changes && changes.length > 0) {
+							// Convert to FileChange format
+							const fileChanges = changes.map((change: any) => ({
+								uri: change.paths.relative,
+								type: (change.paths.newFile
+									? "create"
+									: change.paths.deletedFile
+										? "delete"
+										: "edit") as FileChangeType,
+								fromCheckpoint: oldBaseline,
+								toCheckpoint: toHash,
+								linesAdded: change.content.after ? change.content.after.split("\n").length : 0,
+								linesRemoved: change.content.before ? change.content.before.split("\n").length : 0,
+							}))
+
+							log(`[Task#checkpointCreated] Found ${fileChanges.length} file changes`)
+
+							// Create changeset and send to webview
+							const serializableChangeset = {
+								baseCheckpoint: oldBaseline,
+								files: fileChanges,
+							}
+
+							provider?.postMessageToWebview({
+								type: "filesChanged",
+								filesChanged: serializableChangeset,
+							})
+						} else {
+							log(`[Task#checkpointCreated] No changes found between ${oldBaseline} and ${toHash}`)
 						}
 
-						provider?.postMessageToWebview({
-							type: "filesChanged",
-							filesChanged: serializableChangeset,
-						})
+						// Now update the baseline to the new checkpoint
+						await checkpointFileChangeManager.updateBaseline(toHash)
+						log(`[Task#checkpointCreated] Updated FileChangeManager baseline to ${toHash}`)
 					}
+				} catch (error) {
+					log(`[Task#checkpointCreated] Error calculating/sending file changes: ${error}`)
 				}
 			} catch (err) {
 				log("[Task#getCheckpointService] caught unexpected error in on('checkpoint'), disabling checkpoints")
@@ -262,11 +291,15 @@ export async function checkpointSave(cline: Task, force = false, files?: vscode.
 		.then((result: any) => {
 			// Notify FCO that checkpoint was created
 			if (provider && result) {
-				provider.postMessageToWebview({
-					type: "checkpoint_created",
-					checkpoint: result.commit,
-					previousCheckpoint: service.getCurrentCheckpoint(),
-				} as any)
+				try {
+					provider.postMessageToWebview({
+						type: "checkpoint_created",
+						checkpoint: result.commit,
+						previousCheckpoint: service.getCurrentCheckpoint(),
+					} as any)
+				} catch (error) {
+					console.error("[Task#checkpointSave] Failed to notify FCO of checkpoint creation:", error)
+				}
 			}
 			return result
 		})
@@ -313,10 +346,14 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 		await provider?.postMessageToWebview({ type: "currentCheckpointUpdated", text: commitHash })
 
 		// Notify FCO that checkpoint was restored
-		await provider?.postMessageToWebview({
-			type: "checkpoint_restored",
-			checkpoint: commitHash,
-		} as any)
+		try {
+			await provider?.postMessageToWebview({
+				type: "checkpoint_restored",
+				checkpoint: commitHash,
+			} as any)
+		} catch (error) {
+			console.error("[checkpointRestore] Failed to notify FCO of checkpoint restore:", error)
+		}
 
 		if (mode === "restore") {
 			await cline.overwriteApiConversationHistory(cline.apiConversationHistory.filter((m) => !m.ts || m.ts < ts))
