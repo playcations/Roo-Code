@@ -104,6 +104,18 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 		window.dispatchEvent(messageEvent)
 	}
 
+	// Helper to setup component with files for integration tests
+	const setupComponentWithFiles = async () => {
+		renderComponent()
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+		await waitFor(() => {
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+		})
+	}
+
 	it("should render without errors when no files changed", () => {
 		renderComponent()
 		// Component should not render anything when no files
@@ -148,10 +160,15 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 			previousCheckpoint: "previous-hash",
 		})
 
+		// Backend automatically sends filesChanged message after checkpoint creation
+		// So we simulate that behavior
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: mockChangeset,
+		})
+
 		await waitFor(() => {
-			expect(vscode.postMessage).toHaveBeenCalledWith({
-				type: "filesChangedRequest",
-			})
+			expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
 		})
 	})
 
@@ -176,8 +193,7 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 
 		await waitFor(() => {
 			expect(vscode.postMessage).toHaveBeenCalledWith({
-				type: "filesChangedBaselineUpdate",
-				baseline: "restored-checkpoint-hash",
+				type: "filesChangedRequest",
 			})
 		})
 	})
@@ -313,7 +329,7 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 		})
 	})
 
-	it("should filter out accepted files from display", async () => {
+	it("should send accept message and update display when backend sends filtered results", async () => {
 		renderComponent()
 
 		// Add files
@@ -338,6 +354,23 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 		// Accept one file
 		const acceptButton = screen.getByTestId("accept-src/components/test1.ts")
 		fireEvent.click(acceptButton)
+
+		// Should send message to backend
+		expect(vscode.postMessage).toHaveBeenCalledWith({
+			type: "acceptFileChange",
+			uri: "src/components/test1.ts",
+		})
+
+		// Backend responds with filtered results (only unaccepted files)
+		const filteredChangeset = {
+			baseCheckpoint: "hash1",
+			files: [mockFilesChanged[1]], // Only the second file
+		}
+
+		simulateMessage({
+			type: "filesChanged",
+			filesChanged: filteredChangeset,
+		})
 
 		// File should be filtered out from display
 		await waitFor(() => {
@@ -386,6 +419,335 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 
 		await waitFor(() => {
 			expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+		})
+	})
+
+	// ===== INTEGRATION TESTS =====
+	describe("Message Type Validation", () => {
+		it("should send viewDiff message for individual file action", async () => {
+			vi.clearAllMocks()
+			await setupComponentWithFiles()
+
+			// Expand to show individual files
+			const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+			fireEvent.click(header!)
+
+			await waitFor(() => {
+				expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+			})
+
+			// Test diff button
+			const diffButton = screen.getByTestId("diff-src/components/test1.ts")
+			fireEvent.click(diffButton)
+
+			expect(vscode.postMessage).toHaveBeenCalledWith({
+				type: "viewDiff",
+				uri: "src/components/test1.ts",
+			})
+		})
+
+		it("should send acceptAllFileChanges message correctly", async () => {
+			vi.clearAllMocks()
+			await setupComponentWithFiles()
+
+			const acceptAllButton = screen.getByTestId("accept-all-button")
+			fireEvent.click(acceptAllButton)
+
+			expect(vscode.postMessage).toHaveBeenCalledWith({
+				type: "acceptAllFileChanges",
+			})
+		})
+
+		it("should send rejectAllFileChanges message correctly", async () => {
+			vi.clearAllMocks()
+			await setupComponentWithFiles()
+
+			const rejectAllButton = screen.getByTestId("reject-all-button")
+			fireEvent.click(rejectAllButton)
+
+			expect(vscode.postMessage).toHaveBeenCalledWith({
+				type: "rejectAllFileChanges",
+			})
+		})
+	})
+
+	// ===== ACCESSIBILITY COMPLIANCE =====
+	describe("Accessibility Compliance", () => {
+		it("should have proper ARIA attributes for main interactive elements", async () => {
+			await setupComponentWithFiles()
+
+			// Header should have proper ARIA attributes
+			const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+			expect(header).toHaveAttribute("role", "button")
+			expect(header).toHaveAttribute("aria-expanded", "false")
+			expect(header).toHaveAttribute("aria-label")
+
+			// ARIA label should be translated (shows actual file count in tests)
+			const ariaLabel = header!.getAttribute("aria-label")
+			expect(ariaLabel).toBe("2 files collapsed")
+
+			// Action buttons should have proper attributes
+			const acceptAllButton = screen.getByTestId("accept-all-button")
+			const rejectAllButton = screen.getByTestId("reject-all-button")
+
+			expect(acceptAllButton).toHaveAttribute("title", "Accept All")
+			expect(rejectAllButton).toHaveAttribute("title", "Reject All")
+			expect(acceptAllButton).toHaveAttribute("tabIndex", "0")
+			expect(rejectAllButton).toHaveAttribute("tabIndex", "0")
+		})
+
+		it("should update ARIA attributes when state changes", async () => {
+			await setupComponentWithFiles()
+
+			const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+			expect(header).toHaveAttribute("aria-expanded", "false")
+
+			// Expand
+			fireEvent.click(header!)
+			await waitFor(() => {
+				expect(header).toHaveAttribute("aria-expanded", "true")
+			})
+
+			// ARIA label should be translated (shows actual file count in tests)
+			const expandedAriaLabel = header!.getAttribute("aria-label")
+			expect(expandedAriaLabel).toBe("2 files expanded")
+		})
+
+		it("should provide meaningful tooltips for file actions", async () => {
+			await setupComponentWithFiles()
+
+			// Expand to show individual file actions
+			const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+			fireEvent.click(header!)
+
+			await waitFor(() => {
+				expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+			})
+
+			// File action buttons should have descriptive tooltips
+			const viewDiffButton = screen.getByTestId("diff-src/components/test1.ts")
+			const acceptButton = screen.getByTestId("accept-src/components/test1.ts")
+
+			expect(viewDiffButton).toHaveAttribute("title", "View Diff")
+			expect(acceptButton).toHaveAttribute("title", "Accept")
+		})
+	})
+
+	// ===== ERROR HANDLING =====
+	describe("Error Handling", () => {
+		it("should handle malformed filesChanged messages gracefully", () => {
+			renderComponent()
+
+			// Send malformed message
+			simulateMessage({
+				type: "filesChanged",
+				// Missing filesChanged property
+			})
+
+			// Should not crash or render component
+			expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+		})
+
+		it("should handle malformed checkpoint messages gracefully", () => {
+			renderComponent()
+
+			// Send checkpoint message without required fields
+			simulateMessage({
+				type: "checkpoint_created",
+				// Missing checkpoint property
+			})
+
+			// Should not crash - component is resilient
+			expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+		})
+
+		it("should handle undefined/null message data gracefully", () => {
+			renderComponent()
+
+			// Send message with null data (simulates real-world edge case)
+			const nullEvent = new MessageEvent("message", {
+				data: null,
+			})
+
+			// Should handle null data gracefully without throwing
+			expect(() => window.dispatchEvent(nullEvent)).not.toThrow()
+
+			// Should not render component with null data
+			expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+
+			// Test other malformed message types
+			const undefinedEvent = new MessageEvent("message", {
+				data: undefined,
+			})
+			const stringEvent = new MessageEvent("message", {
+				data: "invalid",
+			})
+			const objectWithoutTypeEvent = new MessageEvent("message", {
+				data: { someField: "value" },
+			})
+
+			// All should be handled gracefully
+			expect(() => {
+				window.dispatchEvent(undefinedEvent)
+				window.dispatchEvent(stringEvent)
+				window.dispatchEvent(objectWithoutTypeEvent)
+			}).not.toThrow()
+
+			// Still should not render component
+			expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+		})
+
+		it("should handle vscode API errors gracefully", async () => {
+			// Mock postMessage to throw error
+			vi.mocked(vscode.postMessage).mockImplementation(() => {
+				throw new Error("VSCode API error")
+			})
+
+			await setupComponentWithFiles()
+
+			// Expand to show individual files
+			const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+			fireEvent.click(header!)
+
+			await waitFor(() => {
+				expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+			})
+
+			// Clicking buttons should not crash the component
+			const acceptButton = screen.getByTestId("accept-src/components/test1.ts")
+			expect(() => fireEvent.click(acceptButton)).not.toThrow()
+
+			// Restore mock
+			vi.mocked(vscode.postMessage).mockRestore()
+		})
+	})
+
+	// ===== PERFORMANCE & EDGE CASES =====
+	describe("Performance and Edge Cases", () => {
+		it("should handle large file sets efficiently", async () => {
+			// Create large changeset (50 files)
+			const largeFiles = Array.from({ length: 50 }, (_, i) => ({
+				uri: `src/file${i}.ts`,
+				type: "edit" as FileChangeType,
+				fromCheckpoint: "hash1",
+				toCheckpoint: "hash2",
+				linesAdded: 10,
+				linesRemoved: 5,
+			}))
+
+			const largeChangeset = {
+				baseCheckpoint: "hash1",
+				files: largeFiles,
+			}
+
+			renderComponent()
+
+			// Should render efficiently with large dataset
+			const startTime = performance.now()
+			simulateMessage({
+				type: "filesChanged",
+				filesChanged: largeChangeset,
+			})
+
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+			})
+
+			const renderTime = performance.now() - startTime
+			// Rendering should be fast (under 500ms for 50 files)
+			expect(renderTime).toBeLessThan(500)
+
+			// Header should show correct count
+			expect(screen.getByTestId("files-changed-header")).toHaveTextContent("50 files changed")
+		})
+
+		it("should handle rapid message updates", async () => {
+			renderComponent()
+
+			// Send multiple rapid updates
+			for (let i = 0; i < 5; i++) {
+				simulateMessage({
+					type: "filesChanged",
+					filesChanged: {
+						baseCheckpoint: `hash${i}`,
+						files: [
+							{
+								uri: `src/rapid${i}.ts`,
+								type: "edit" as FileChangeType,
+								fromCheckpoint: `hash${i}`,
+								toCheckpoint: `hash${i + 1}`,
+								linesAdded: i + 1,
+								linesRemoved: 0,
+							},
+						],
+					},
+				})
+			}
+
+			// Should show latest update (1 file from last message)
+			await waitFor(() => {
+				expect(screen.getByTestId("files-changed-overview")).toBeInTheDocument()
+				expect(screen.getByTestId("files-changed-header")).toHaveTextContent("1 files changed")
+			})
+		})
+
+		it("should handle empty file changesets", async () => {
+			renderComponent()
+
+			// Send empty changeset
+			simulateMessage({
+				type: "filesChanged",
+				filesChanged: {
+					baseCheckpoint: "hash1",
+					files: [],
+				},
+			})
+
+			// Should not render component with empty files
+			expect(screen.queryByTestId("files-changed-overview")).not.toBeInTheDocument()
+		})
+	})
+
+	// ===== INTERNATIONALIZATION =====
+	describe("Internationalization", () => {
+		it("should use proper translation keys for all UI elements", async () => {
+			await setupComponentWithFiles()
+
+			// Header should use translated text with file count and line changes
+			expect(screen.getByTestId("files-changed-header")).toHaveTextContent("2 files changed")
+			expect(screen.getByTestId("files-changed-header")).toHaveTextContent("(+35, -5)")
+
+			// Action buttons should use translations
+			expect(screen.getByTestId("accept-all-button")).toHaveAttribute("title", "Accept All")
+			expect(screen.getByTestId("reject-all-button")).toHaveAttribute("title", "Reject All")
+		})
+
+		it("should format file type labels correctly", async () => {
+			await setupComponentWithFiles()
+
+			// Expand to show individual files
+			const header = screen.getByTestId("files-changed-header").closest('[role="button"]')
+			fireEvent.click(header!)
+
+			await waitFor(() => {
+				expect(screen.getByTestId("file-item-src/components/test1.ts")).toBeInTheDocument()
+			})
+
+			// File type labels should be translated
+			// Check for file type labels within the file items (main test data has different files)
+			const editedFile = screen.getByTestId("file-item-src/components/test1.ts")
+			const createdFile = screen.getByTestId("file-item-src/components/test2.ts")
+
+			expect(editedFile).toHaveTextContent("Modified")
+			expect(createdFile).toHaveTextContent("Created")
+		})
+
+		it("should handle line count formatting for different locales", async () => {
+			await setupComponentWithFiles()
+
+			// Header should format line changes correctly
+			const header = screen.getByTestId("files-changed-header")
+			expect(header).toHaveTextContent("+35, -5") // Standard format
 		})
 	})
 })

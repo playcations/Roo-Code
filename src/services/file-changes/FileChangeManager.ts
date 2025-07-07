@@ -92,9 +92,10 @@ export class FileChangeManager {
 		// The actual diff calculation should be handled by the checkpoint service
 		this.changeset.files = []
 
-		// DON'T clear accepted/rejected state on baseline change - preserve user decisions
-		// The accepted/rejected state should only be cleared explicitly (e.g., task restart)
-		// to maintain user accept/reject decisions across checkpoint operations
+		// Clear accepted/rejected state - baseline change means we're starting fresh
+		// This happens during checkpoint restore (time travel) where we want a clean slate
+		this.acceptedFiles.clear()
+		this.rejectedFiles.clear()
 	}
 
 	/**

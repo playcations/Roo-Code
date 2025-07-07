@@ -164,6 +164,12 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 		const handleMessage = (event: MessageEvent) => {
 			const message = event.data
 
+			// Guard against null/undefined/malformed messages
+			if (!message || typeof message !== "object" || !message.type) {
+				console.debug("[FCO] Ignoring malformed message:", message)
+				return
+			}
+
 			switch (message.type) {
 				case "filesChanged":
 					if (message.filesChanged) {

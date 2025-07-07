@@ -1,7 +1,7 @@
 // Tests for simplified FileChangeManager - Pure diff calculation service
 // npx vitest run src/services/file-changes/__tests__/FileChangeManager.simplified.test.ts
 
-import { describe, beforeEach, it, expect } from "vitest"
+import { describe, beforeEach, afterEach, it, expect } from "vitest"
 import { FileChangeManager } from "../FileChangeManager"
 import { FileChange } from "@roo-code/types"
 
