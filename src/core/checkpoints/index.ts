@@ -364,13 +364,38 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 
 	const provider = cline.providerRef.deref()
 
-	// Note: Simplified FileChangeManager doesn't need state preservation
-	// It will be recalculated after checkpoint restore
-
 	try {
 		await service.restoreCheckpoint(commitHash)
 		TelemetryService.instance.captureCheckpointRestored(cline.taskId)
 		await provider?.postMessageToWebview({ type: "currentCheckpointUpdated", text: commitHash })
+
+		// Update FileChangeManager baseline to restored checkpoint and clear accept/reject state
+		try {
+			const fileChangeManager = provider?.getFileChangeManager()
+			if (fileChangeManager) {
+				// Reset baseline to restored checkpoint (fresh start from this point)
+				await fileChangeManager.updateBaseline(commitHash)
+				provider?.log(
+					`[checkpointRestore] Reset FileChangeManager baseline to restored checkpoint ${commitHash}`,
+				)
+
+				// Clear accept/reject state - checkpoint restore is time travel, start with clean slate
+				if (typeof fileChangeManager.clearAcceptedRejectedState === "function") {
+					fileChangeManager.clearAcceptedRejectedState()
+					provider?.log(`[checkpointRestore] Cleared accept/reject state for fresh start`)
+				}
+
+				// Calculate and send current changes (should be empty immediately after restore)
+				const changes = fileChangeManager.getChanges()
+				provider?.postMessageToWebview({
+					type: "filesChanged",
+					filesChanged: changes.files.length > 0 ? changes : undefined,
+				})
+			}
+		} catch (error) {
+			provider?.log(`[checkpointRestore] Failed to update FileChangeManager baseline: ${error}`)
+			// Don't throw - allow restore to continue even if FCO sync fails
+		}
 
 		// Notify FCO that checkpoint was restored
 		try {

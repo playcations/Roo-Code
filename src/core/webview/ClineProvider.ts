@@ -1078,15 +1078,13 @@ export class ClineProvider
 											// Update FileChangeManager with recalculated files
 											fileChangeManager.setFiles(fileChanges)
 
-											// Send updated changeset
-											const updatedChangeset = {
-												baseCheckpoint: changeset.baseCheckpoint,
-												files: fileChanges,
-											}
+											// Get filtered changeset that excludes already accepted/rejected files
+											const filteredChangeset = fileChangeManager.getChanges()
 
 											this.postMessageToWebview({
 												type: "filesChanged",
-												filesChanged: updatedChangeset,
+												filesChanged:
+													filteredChangeset.files.length > 0 ? filteredChangeset : undefined,
 											})
 											break
 										}
@@ -1103,9 +1101,11 @@ export class ClineProvider
 									changeset.files.map((f) => ({ uri: f.uri, type: f.type })),
 								)
 							}
+							// Use filtered changeset to exclude accepted/rejected files
+							const filteredChangeset = fileChangeManager.getChanges()
 							this.postMessageToWebview({
 								type: "filesChanged",
-								filesChanged: changeset.files.length > 0 ? changeset : undefined,
+								filesChanged: filteredChangeset.files.length > 0 ? filteredChangeset : undefined,
 							})
 						} else {
 							console.log(
