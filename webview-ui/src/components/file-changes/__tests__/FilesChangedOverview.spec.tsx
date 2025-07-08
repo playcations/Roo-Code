@@ -36,6 +36,8 @@ vi.mock("react-i18next", () => ({
 				"file-changes:line_changes.added": `+${options?.count || 0}`,
 				"file-changes:line_changes.removed": `-${options?.count || 0}`,
 				"file-changes:line_changes.added_removed": `+${options?.added || 0}, -${options?.removed || 0}`,
+				"file-changes:line_changes.deleted": "deleted",
+				"file-changes:line_changes.modified": "modified",
 				"file-changes:accessibility.files_list": `${options?.count || 0} files ${options?.state || ""}`,
 				"file-changes:accessibility.expanded": "expanded",
 				"file-changes:accessibility.collapsed": "collapsed",
