@@ -20,7 +20,20 @@ import { ClineProvider } from "../ClineProvider"
 // Mock setup must come before imports
 vi.mock("../../prompts/sections/custom-instructions")
 
-vi.mock("vscode")
+vi.mock("../../../integrations/editor/DecorationController", () => ({
+	DecorationController: vi.fn().mockImplementation(() => ({
+		addLines: vi.fn(),
+		clear: vi.fn(),
+		updateOverlayAfterLine: vi.fn(),
+		setActiveLine: vi.fn(),
+	})),
+}))
+
+vi.mock("../../../integrations/editor/DiffViewProvider", () => ({
+	DiffViewProvider: vi.fn().mockImplementation(() => ({
+		// Add mock methods if needed
+	})),
+}))
 
 vi.mock("p-wait-for", () => ({
 	__esModule: true,
@@ -144,9 +157,23 @@ vi.mock("vscode", () => ({
 		executeCommand: vi.fn().mockResolvedValue(undefined),
 	},
 	window: {
+		createTextEditorDecorationType: vi.fn().mockReturnValue({
+			dispose: vi.fn(),
+		}),
 		showInformationMessage: vi.fn(),
+		showWarningMessage: vi.fn(),
 		showErrorMessage: vi.fn(),
 	},
+	Range: vi.fn().mockImplementation((start, startChar, end, endChar) => ({
+		start: { line: start, character: startChar },
+		end: { line: end, character: endChar },
+		with: vi.fn().mockReturnThis(),
+	})),
+	Position: vi.fn().mockImplementation((line, character) => ({
+		line,
+		character,
+		translate: vi.fn().mockReturnThis(),
+	})),
 	workspace: {
 		getConfiguration: vi.fn().mockReturnValue({
 			get: vi.fn().mockReturnValue([]),
@@ -176,10 +203,6 @@ vi.mock("vscode", () => ({
 vi.mock("../../../utils/tts", () => ({
 	setTtsEnabled: vi.fn(),
 	setTtsSpeed: vi.fn(),
-}))
-
-vi.mock("../../../api", () => ({
-	buildApiHandler: vi.fn(),
 }))
 
 vi.mock("../../prompts/system", () => ({
@@ -225,11 +248,7 @@ vi.mock("../../../integrations/misc/extract-text", () => ({
 	}),
 }))
 
-// Mock getModels for router model tests
-vi.mock("../../../api/providers/fetchers/modelCache", () => ({
-	getModels: vi.fn().mockResolvedValue({}),
-	flushModels: vi.fn(),
-}))
+// Mock getModels for router model tests (consolidated)
 
 vi.mock("../../../shared/modes", () => ({
 	modes: [
@@ -276,25 +295,12 @@ vi.mock("../../../shared/modes", () => ({
 	defaultModeSlug: "code",
 }))
 
-vi.mock("../../prompts/system", () => ({
-	SYSTEM_PROMPT: vi.fn().mockResolvedValue("mocked system prompt"),
-	codeMode: "code",
-}))
-
 vi.mock("../../../api", () => ({
 	buildApiHandler: vi.fn().mockReturnValue({
 		getModel: vi.fn().mockReturnValue({
 			id: "claude-3-sonnet",
 			info: { supportsComputerUse: false },
 		}),
-	}),
-}))
-
-vi.mock("../../../integrations/misc/extract-text", () => ({
-	extractTextFromFile: vi.fn().mockImplementation(async (_filePath: string) => {
-		const content = "const x = 1;\nconst y = 2;\nconst z = 3;"
-		const lines = content.split("\n")
-		return lines.map((line, index) => `${index + 1} | ${line}`).join("\n")
 	}),
 }))
 
@@ -1684,6 +1690,7 @@ describe("ClineProvider", () => {
 
 			;(provider as any).providerSettingsManager = {
 				setModeConfig: vi.fn().mockRejectedValue(new Error("Failed to update mode config")),
+				saveConfig: vi.fn().mockResolvedValue("test-id"),
 				listConfig: vi
 					.fn()
 					.mockResolvedValue([{ name: "test-config", id: "test-id", apiProvider: "anthropic" }]),
@@ -1715,7 +1722,7 @@ describe("ClineProvider", () => {
 
 			;(provider as any).providerSettingsManager = {
 				setModeConfig: vi.fn(),
-				saveConfig: vi.fn().mockResolvedValue(undefined),
+				saveConfig: vi.fn().mockResolvedValue("test-id"),
 				listConfig: vi
 					.fn()
 					.mockResolvedValue([{ name: "test-config", id: "test-id", apiProvider: "anthropic" }]),
@@ -1758,7 +1765,7 @@ describe("ClineProvider", () => {
 			})
 			;(provider as any).providerSettingsManager = {
 				setModeConfig: vi.fn(),
-				saveConfig: vi.fn().mockResolvedValue(undefined),
+				saveConfig: vi.fn().mockResolvedValue("test-id"),
 				listConfig: vi
 					.fn()
 					.mockResolvedValue([{ name: "test-config", id: "test-id", apiProvider: "anthropic" }]),
@@ -1799,7 +1806,7 @@ describe("ClineProvider", () => {
 
 			;(provider as any).providerSettingsManager = {
 				setModeConfig: vi.fn(),
-				saveConfig: vi.fn().mockResolvedValue(undefined),
+				saveConfig: vi.fn().mockResolvedValue("test-id"),
 				listConfig: vi
 					.fn()
 					.mockResolvedValue([{ name: "test-config", id: "test-id", apiProvider: "anthropic" }]),

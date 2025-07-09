@@ -229,6 +229,7 @@ export interface WebviewMessage {
 	command?: string // Added for new message types sent from webview
 	uri?: string // Added for file URIs in new message types
 	baseline?: string // For filesChangedBaselineUpdate message
+	fileChanges?: Array<{ uri: string; type: string }> // For filesChangedRequest message
 	filters?: { type?: string; search?: string; tags?: string[] }
 	url?: string // For openExternal
 	mpItem?: MarketplaceItem

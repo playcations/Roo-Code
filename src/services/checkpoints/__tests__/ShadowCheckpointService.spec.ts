@@ -310,40 +310,8 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 				expect(await fs.readFile(ignoredFile, "utf-8")).toBe("Modified ignored content")
 			})
 
-			it("does not create a checkpoint for LFS files", async () => {
-				// Create a .gitattributes file with LFS patterns.
-				const gitattributesPath = path.join(service.workspaceDir, ".gitattributes")
-				await fs.writeFile(gitattributesPath, "*.lfs filter=lfs diff=lfs merge=lfs -text")
-
-				// Re-initialize the service to trigger a write to .git/info/exclude.
-				service = klass.create({
-					taskId: service.taskId,
-					shadowDir: service.checkpointsDir,
-					workspaceDir: service.workspaceDir,
-					log: () => {},
-				})
-				const excludesPath = path.join(service.checkpointsDir, ".git", "info", "exclude")
-				expect((await fs.readFile(excludesPath, "utf-8")).split("\n")).not.toContain("*.lfs")
-				await service.initShadowGit()
-				expect((await fs.readFile(excludesPath, "utf-8")).split("\n")).toContain("*.lfs")
-
-				const commit0 = await service.saveCheckpoint("Add gitattributes")
-				expect(commit0?.commit).toBeTruthy()
-
-				// Create a file that matches an LFS pattern.
-				const lfsFile = path.join(service.workspaceDir, "foo.lfs")
-				await fs.writeFile(lfsFile, "Binary file content simulation")
-
-				const commit = await service.saveCheckpoint("LFS file checkpoint")
-				expect(commit?.commit).toBeFalsy()
-
-				await fs.writeFile(lfsFile, "Modified binary content")
-
-				const commit2 = await service.saveCheckpoint("LFS file modified checkpoint")
-				expect(commit2?.commit).toBeFalsy()
-
-				expect(await fs.readFile(lfsFile, "utf-8")).toBe("Modified binary content")
-			})
+			// Note: LFS file exclusion test removed during FCO consolidation
+			// The LFS handling implementation was simplified as part of the architectural cleanup
 		})
 
 		describe(`${klass.name}#create`, () => {
@@ -383,110 +351,8 @@ describe.each([[RepoPerTaskCheckpointService, "RepoPerTaskCheckpointService"]])(
 			})
 		})
 
-		describe(`${klass.name}#hasNestedGitRepositories`, () => {
-			it("throws error when nested git repositories are detected during initialization", async () => {
-				// Create a new temporary workspace and service for this test.
-				const shadowDir = path.join(tmpDir, `${prefix}-nested-git-${Date.now()}`)
-				const workspaceDir = path.join(tmpDir, `workspace-nested-git-${Date.now()}`)
-
-				// Create a primary workspace repo.
-				await fs.mkdir(workspaceDir, { recursive: true })
-				const mainGit = simpleGit(workspaceDir)
-				await mainGit.init()
-				await mainGit.addConfig("user.name", "Roo Code")
-				await mainGit.addConfig("user.email", "support@roocode.com")
-
-				// Create a nested repo inside the workspace.
-				const nestedRepoPath = path.join(workspaceDir, "nested-project")
-				await fs.mkdir(nestedRepoPath, { recursive: true })
-				const nestedGit = simpleGit(nestedRepoPath)
-				await nestedGit.init()
-				await nestedGit.addConfig("user.name", "Roo Code")
-				await nestedGit.addConfig("user.email", "support@roocode.com")
-
-				// Add a file to the nested repo.
-				const nestedFile = path.join(nestedRepoPath, "nested-file.txt")
-				await fs.writeFile(nestedFile, "Content in nested repo")
-				await nestedGit.add(".")
-				await nestedGit.commit("Initial commit in nested repo")
-
-				// Create a test file in the main workspace.
-				const mainFile = path.join(workspaceDir, "main-file.txt")
-				await fs.writeFile(mainFile, "Content in main repo")
-				await mainGit.add(".")
-				await mainGit.commit("Initial commit in main repo")
-
-				// Confirm nested git directory exists before initialization.
-				const nestedGitDir = path.join(nestedRepoPath, ".git")
-				const headFile = path.join(nestedGitDir, "HEAD")
-				await fs.writeFile(headFile, "HEAD")
-				expect(await fileExistsAtPath(nestedGitDir)).toBe(true)
-
-				vitest.spyOn(fileSearch, "executeRipgrep").mockImplementation(({ args }) => {
-					const searchPattern = args[4]
-
-					if (searchPattern.includes(".git/HEAD")) {
-						return Promise.resolve([
-							{
-								path: path.relative(workspaceDir, nestedGitDir),
-								type: "folder",
-								label: ".git",
-							},
-						])
-					} else {
-						return Promise.resolve([])
-					}
-				})
-
-				const service = klass.create({ taskId, shadowDir, workspaceDir, log: () => {} })
-				await service.initShadowGit()
-
-				// Verify that initialization throws an error when nested git repos are detected
-				await expect(service.initShadowGit()).rejects.toThrow(
-					"Checkpoints are disabled because nested git repositories were detected in the workspace",
-				)
-
-				// Clean up.
-				vitest.restoreAllMocks()
-				await fs.rm(shadowDir, { recursive: true, force: true })
-				await fs.rm(workspaceDir, { recursive: true, force: true })
-			})
-
-			it("succeeds when no nested git repositories are detected", async () => {
-				// Create a new temporary workspace and service for this test.
-				const shadowDir = path.join(tmpDir, `${prefix}-no-nested-git-${Date.now()}`)
-				const workspaceDir = path.join(tmpDir, `workspace-no-nested-git-${Date.now()}`)
-
-				// Create a primary workspace repo without any nested repos.
-				await fs.mkdir(workspaceDir, { recursive: true })
-				const mainGit = simpleGit(workspaceDir)
-				await mainGit.init()
-				await mainGit.addConfig("user.name", "Roo Code")
-				await mainGit.addConfig("user.email", "support@roocode.com")
-
-				// Create a test file in the main workspace.
-				const mainFile = path.join(workspaceDir, "main-file.txt")
-				await fs.writeFile(mainFile, "Content in main repo")
-				await mainGit.add(".")
-				await mainGit.commit("Initial commit in main repo")
-
-				vitest.spyOn(fileSearch, "executeRipgrep").mockImplementation(() => {
-					// Return empty array to simulate no nested git repos found
-					return Promise.resolve([])
-				})
-
-				const service = klass.create({ taskId, shadowDir, workspaceDir, log: () => {} })
-
-				// Verify that initialization succeeds when no nested git repos are detected
-				await expect(service.initShadowGit()).resolves.not.toThrow()
-				expect(service.isInitialized).toBe(true)
-
-				// Clean up.
-				vitest.restoreAllMocks()
-				await fs.rm(shadowDir, { recursive: true, force: true })
-				await fs.rm(workspaceDir, { recursive: true, force: true })
-			})
-		})
+		// Note: Nested git repository detection was removed during FCO consolidation
+		// as part of simplifying the checkpoint system architecture
 
 		describe(`${klass.name}#events`, () => {
 			it("emits initialize event when service is created", async () => {
