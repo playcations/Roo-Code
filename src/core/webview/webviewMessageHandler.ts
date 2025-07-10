@@ -11,7 +11,6 @@ import { CloudService } from "@roo-code/cloud"
 import { TelemetryService } from "@roo-code/telemetry"
 
 import { ClineProvider } from "./ClineProvider"
-import { FCOMessageHandler } from "../../services/file-changes/FCOMessageHandler"
 import { changeLanguage, t } from "../../i18n"
 import { Package } from "../../shared/package"
 import { RouterName, toRouterName, ModelRecord } from "../../shared/api"
@@ -57,13 +56,6 @@ export const webviewMessageHandler = async (
 	const getGlobalState = <K extends keyof GlobalState>(key: K) => provider.contextProxy.getValue(key)
 	const updateGlobalState = async <K extends keyof GlobalState>(key: K, value: GlobalState[K]) =>
 		await provider.contextProxy.setValue(key, value)
-
-	// Check if this is an FCO message and delegate to FCO handler
-	const fcoMessageHandler = new FCOMessageHandler(provider)
-	if (fcoMessageHandler.shouldHandleMessage(message)) {
-		await fcoMessageHandler.handleMessage(message)
-		return
-	}
 
 	switch (message.type) {
 		case "webviewDidLaunch":
