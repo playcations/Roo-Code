@@ -162,9 +162,24 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		try {
 			await git.add(".")
 		} catch (error) {
-			this.log(
-				`[${this.constructor.name}#stageAll] failed to add files to git: ${error instanceof Error ? error.message : String(error)}`,
-			)
+			const errorMessage = error instanceof Error ? error.message : String(error)
+
+			// Handle git lock errors by waiting and retrying once
+			if (errorMessage.includes("index.lock")) {
+				this.log(`[${this.constructor.name}#stageAll] git lock detected, waiting and retrying...`)
+				await new Promise((resolve) => setTimeout(resolve, 1000))
+
+				try {
+					await git.add(".")
+					this.log(`[${this.constructor.name}#stageAll] retry successful after git lock`)
+				} catch (retryError) {
+					this.log(
+						`[${this.constructor.name}#stageAll] retry failed: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
+					)
+				}
+			} else {
+				this.log(`[${this.constructor.name}#stageAll] failed to add files to git: ${errorMessage}`)
+			}
 		}
 	}
 

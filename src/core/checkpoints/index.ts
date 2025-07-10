@@ -312,18 +312,32 @@ export async function checkpointSave(cline: Task, force = false, files?: vscode.
 	// Get provider for messaging
 	const provider = cline.providerRef.deref()
 
+	// Capture the previous checkpoint BEFORE saving the new one
+	const previousCheckpoint = service.getCurrentCheckpoint()
+	console.log(`[checkpointSave] Previous checkpoint: ${previousCheckpoint}`)
+
 	// Start the checkpoint process in the background and track it
 	const savePromise = service
 		.saveCheckpoint(`Task: ${cline.taskId}, Time: ${Date.now()}`, { allowEmpty: force, files })
-		.then((result: any) => {
+		.then(async (result: any) => {
+			console.log(`[checkpointSave] New checkpoint created: ${result.commit}`)
+
 			// Notify FCO that checkpoint was created
 			if (provider && result) {
 				try {
 					provider.postMessageToWebview({
 						type: "checkpoint_created",
 						checkpoint: result.commit,
-						previousCheckpoint: service.getCurrentCheckpoint(),
+						previousCheckpoint: previousCheckpoint,
 					} as any)
+
+					// NOTE: Don't send filesChanged here - it's handled by the checkpointCreated event
+					// to avoid duplicate/conflicting messages that override cumulative tracking.
+					// The checkpointCreated event handler calculates cumulative changes from the baseline
+					// and sends the complete filesChanged message with all accumulated changes.
+					console.log(
+						`[checkpointSave] FCO update delegated to checkpointCreated event for cumulative tracking`,
+					)
 				} catch (error) {
 					console.error("[Task#checkpointSave] Failed to notify FCO of checkpoint creation:", error)
 				}

@@ -1,8 +1,11 @@
 import * as vscode from "vscode"
+import * as fs from "fs/promises"
+import * as path from "path"
 import { WebviewMessage } from "../../shared/WebviewMessage"
 import type { FileChangeType } from "@roo-code/types"
 import { FileChangeManager } from "./FileChangeManager"
 import { ClineProvider } from "../../core/webview/ClineProvider"
+import { getCheckpointService } from "../../core/checkpoints"
 
 /**
  * Handles FCO-specific webview messages that were previously scattered throughout ClineProvider
@@ -36,7 +39,11 @@ export class FCOMessageHandler {
 
 		switch (message.type) {
 			case "webviewReady": {
-				const fileChangeManager = this.provider.getFileChangeManager()
+				// Ensure FileChangeManager is initialized when webview is ready
+				let fileChangeManager = this.provider.getFileChangeManager()
+				if (!fileChangeManager) {
+					fileChangeManager = await this.provider.ensureFileChangeManager()
+				}
 				if (fileChangeManager) {
 					this.provider.postMessageToWebview({
 						type: "filesChanged",
@@ -164,7 +171,10 @@ export class FCOMessageHandler {
 	}
 
 	private async handleAcceptFileChange(message: WebviewMessage): Promise<void> {
-		const acceptFileChangeManager = this.provider.getFileChangeManager()
+		let acceptFileChangeManager = this.provider.getFileChangeManager()
+		if (!acceptFileChangeManager) {
+			acceptFileChangeManager = await this.provider.ensureFileChangeManager()
+		}
 		if (message.uri && acceptFileChangeManager) {
 			await acceptFileChangeManager.acceptChange(message.uri)
 
@@ -178,12 +188,55 @@ export class FCOMessageHandler {
 	}
 
 	private async handleRejectFileChange(message: WebviewMessage): Promise<void> {
-		const rejectFileChangeManager = this.provider.getFileChangeManager()
-		if (message.uri && rejectFileChangeManager) {
-			// Remove from tracking
+		console.log(`[FCO] handleRejectFileChange called for URI: ${message.uri}`)
+		let rejectFileChangeManager = this.provider.getFileChangeManager()
+		if (!rejectFileChangeManager) {
+			rejectFileChangeManager = await this.provider.ensureFileChangeManager()
+		}
+		if (!message.uri || !rejectFileChangeManager) {
+			return
+		}
+
+		try {
+			// Get the file change details to know which checkpoint to restore from
+			const fileChange = rejectFileChangeManager.getFileChange(message.uri)
+			if (!fileChange) {
+				console.error(`[FCO] File change not found for URI: ${message.uri}`)
+				return
+			}
+
+			// Get the current task and checkpoint service
+			const currentTask = this.provider.getCurrentCline()
+			if (!currentTask) {
+				console.error(`[FCO] No current task found for file reversion`)
+				return
+			}
+
+			const checkpointService = getCheckpointService(currentTask)
+			if (!checkpointService) {
+				console.error(`[FCO] No checkpoint service available for file reversion`)
+				return
+			}
+
+			// Revert the file to its previous state
+			await this.revertFileToCheckpoint(message.uri, fileChange.fromCheckpoint, checkpointService)
+			console.log(`[FCO] File ${message.uri} successfully reverted`)
+
+			// Remove from tracking since the file has been reverted
 			await rejectFileChangeManager.rejectChange(message.uri)
 
 			// Send updated state
+			const updatedChangeset = rejectFileChangeManager.getChanges()
+			console.log(`[FCO] After rejection, sending ${updatedChangeset.files.length} files to webview`)
+			this.provider.postMessageToWebview({
+				type: "filesChanged",
+				filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
+			})
+		} catch (error) {
+			console.error(`[FCO] Error reverting file ${message.uri}:`, error)
+			// Fall back to old behavior (just remove from display) if reversion fails
+			await rejectFileChangeManager.rejectChange(message.uri)
+
 			const updatedChangeset = rejectFileChangeManager.getChanges()
 			this.provider.postMessageToWebview({
 				type: "filesChanged",
@@ -193,7 +246,10 @@ export class FCOMessageHandler {
 	}
 
 	private async handleAcceptAllFileChanges(): Promise<void> {
-		const acceptAllFileChangeManager = this.provider.getFileChangeManager()
+		let acceptAllFileChangeManager = this.provider.getFileChangeManager()
+		if (!acceptAllFileChangeManager) {
+			acceptAllFileChangeManager = await this.provider.ensureFileChangeManager()
+		}
 		await acceptAllFileChangeManager?.acceptAll()
 
 		// Clear state
@@ -204,12 +260,53 @@ export class FCOMessageHandler {
 	}
 
 	private async handleRejectAllFileChanges(): Promise<void> {
-		const rejectAllFileChangeManager = this.provider.getFileChangeManager()
-		if (rejectAllFileChangeManager) {
-			// Clear all tracking
+		let rejectAllFileChangeManager = this.provider.getFileChangeManager()
+		if (!rejectAllFileChangeManager) {
+			rejectAllFileChangeManager = await this.provider.ensureFileChangeManager()
+		}
+		if (!rejectAllFileChangeManager) {
+			return
+		}
+
+		try {
+			// Get all current file changes
+			const changeset = rejectAllFileChangeManager.getChanges()
+
+			// Get the current task and checkpoint service
+			const currentTask = this.provider.getCurrentCline()
+			if (!currentTask) {
+				console.error(`[FCO] No current task found for file reversion`)
+				return
+			}
+
+			const checkpointService = getCheckpointService(currentTask)
+			if (!checkpointService) {
+				console.error(`[FCO] No checkpoint service available for file reversion`)
+				return
+			}
+
+			// Revert all files to their previous states
+			for (const fileChange of changeset.files) {
+				try {
+					await this.revertFileToCheckpoint(fileChange.uri, fileChange.fromCheckpoint, checkpointService)
+				} catch (error) {
+					console.error(`[FCO] Failed to revert file ${fileChange.uri}:`, error)
+					// Continue with other files even if one fails
+				}
+			}
+
+			// Clear all tracking after reverting files
 			await rejectAllFileChangeManager.rejectAll()
 
 			// Clear state
+			this.provider.postMessageToWebview({
+				type: "filesChanged",
+				filesChanged: undefined,
+			})
+		} catch (error) {
+			console.error(`[FCO] Error reverting all files:`, error)
+			// Fall back to old behavior if reversion fails
+			await rejectAllFileChangeManager.rejectAll()
 			this.provider.postMessageToWebview({
 				type: "filesChanged",
 				filesChanged: undefined,
@@ -219,7 +316,10 @@ export class FCOMessageHandler {
 
 	private async handleFilesChangedRequest(message: WebviewMessage, task: any): Promise<void> {
 		try {
-			const fileChangeManager = this.provider.getFileChangeManager()
+			let fileChangeManager = this.provider.getFileChangeManager()
+			if (!fileChangeManager) {
+				fileChangeManager = await this.provider.ensureFileChangeManager()
+			}
 
 			if (fileChangeManager && task?.checkpointService) {
 				const changeset = fileChangeManager.getChanges()
@@ -260,7 +360,10 @@ export class FCOMessageHandler {
 
 	private async handleFilesChangedBaselineUpdate(message: WebviewMessage, task: any): Promise<void> {
 		try {
-			const fileChangeManager = this.provider.getFileChangeManager()
+			let fileChangeManager = this.provider.getFileChangeManager()
+			if (!fileChangeManager) {
+				fileChangeManager = await this.provider.ensureFileChangeManager()
+			}
 
 			if (fileChangeManager && task && message.baseline) {
 				// Update baseline to the specified checkpoint
@@ -284,6 +387,67 @@ export class FCOMessageHandler {
 				type: "filesChanged",
 				filesChanged: undefined,
 			})
+		}
+	}
+
+	/**
+	 * Revert a specific file to its content at a specific checkpoint
+	 */
+	private async revertFileToCheckpoint(
+		relativeFilePath: string,
+		fromCheckpoint: string,
+		checkpointService: any,
+	): Promise<void> {
+		try {
+			// Get the workspace path
+			const workspaceFolder = vscode.workspace.workspaceFolders?.[0]
+			if (!workspaceFolder) {
+				throw new Error("No workspace folder found")
+			}
+
+			const absoluteFilePath = path.join(workspaceFolder.uri.fsPath, relativeFilePath)
+
+			// Get the file content from the checkpoint
+			if (!checkpointService.getContent) {
+				throw new Error("Checkpoint service does not support getContent method")
+			}
+
+			let previousContent: string | null = null
+			try {
+				previousContent = await checkpointService.getContent(fromCheckpoint, absoluteFilePath)
+			} catch (error) {
+				// If file doesn't exist in checkpoint, it's a newly created file
+				const errorMessage = error instanceof Error ? error.message : String(error)
+				if (errorMessage.includes("exists on disk, but not in") || errorMessage.includes("does not exist")) {
+					console.log(
+						`[FCO] File ${relativeFilePath} didn't exist in checkpoint ${fromCheckpoint}, treating as new file`,
+					)
+					previousContent = null
+				} else {
+					throw error
+				}
+			}
+
+			// Check if the file was newly created (didn't exist in the fromCheckpoint)
+			if (!previousContent) {
+				// File was newly created, so delete it
+				console.log(`[FCO] Deleting newly created file: ${relativeFilePath}`)
+				try {
+					await fs.unlink(absoluteFilePath)
+				} catch (error) {
+					if ((error as any).code !== "ENOENT") {
+						throw error
+					}
+					// File already doesn't exist, that's fine
+				}
+			} else {
+				// File existed before, restore its previous content
+				console.log(`[FCO] Restoring file content: ${relativeFilePath}`)
+				await fs.writeFile(absoluteFilePath, previousContent, "utf8")
+			}
+		} catch (error) {
+			console.error(`[FCO] Failed to revert file ${relativeFilePath}:`, error)
+			throw error
 		}
 	}
 }

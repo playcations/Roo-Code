@@ -1855,7 +1855,7 @@ export class ClineProvider
 	/**
 	 * Ensure FileChangeManager exists and return it (lazy initialization)
 	 */
-	private async ensureFileChangeManager(): Promise<
+	public async ensureFileChangeManager(): Promise<
 		import("../../services/file-changes/FileChangeManager").FileChangeManager
 	> {
 		if (!this.globalFileChangeManager) {

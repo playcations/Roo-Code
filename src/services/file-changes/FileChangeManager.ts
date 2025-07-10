@@ -100,6 +100,7 @@ export class FileChangeManager {
 
 	/**
 	 * Set the files for the changeset (called by backend when files change)
+	 * Preserves existing accept/reject state for files with the same URI
 	 */
 	public setFiles(files: FileChange[]): void {
 		this.changeset.files = files
