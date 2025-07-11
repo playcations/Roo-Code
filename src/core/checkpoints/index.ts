@@ -201,14 +201,21 @@ export function getCheckpointService(cline: Task) {
 							// DON'T clear accepted/rejected state here - preserve user's accept/reject decisions
 							// The state should only be cleared on baseline changes (checkpoint restore) or task restart
 
-							// Get filtered changeset that excludes already accepted/rejected files
-							const filteredChangeset = checkpointFileChangeManager.getChanges()
+							// Get filtered changeset that excludes already accepted/rejected files and only shows LLM-modified files
+							const filteredChangeset = await checkpointFileChangeManager.getLLMOnlyChanges(
+								cline.taskId,
+								cline.fileContextTracker,
+							)
 
-							// Create changeset and send to webview (only unaccepted files)
+							// Create changeset and send to webview (only LLM-modified, unaccepted files)
 							const serializableChangeset = {
 								baseCheckpoint: filteredChangeset.baseCheckpoint,
 								files: filteredChangeset.files,
 							}
+
+							log(
+								`[Task#checkpointCreated] Sending ${filteredChangeset.files.length} LLM-only file changes to webview`,
+							)
 
 							provider?.postMessageToWebview({
 								type: "filesChanged",
