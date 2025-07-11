@@ -1,4 +1,5 @@
 import { FileChange, FileChangeset } from "@roo-code/types"
+import type { FileContextTracker } from "../../core/context-tracking/FileContextTracker"
 
 /**
  * Simplified FileChangeManager - Pure diff calculation service
@@ -24,6 +25,34 @@ export class FileChangeManager {
 	public getChanges(): FileChangeset {
 		const filteredFiles = this.changeset.files.filter(
 			(file) => !this.acceptedFiles.has(file.uri) && !this.rejectedFiles.has(file.uri),
+		)
+
+		return {
+			...this.changeset,
+			files: filteredFiles,
+		}
+	}
+
+	/**
+	 * Get changeset filtered to only show LLM-modified files
+	 */
+	public async getLLMOnlyChanges(taskId: string, fileContextTracker: FileContextTracker): Promise<FileChangeset> {
+		// Get task metadata to determine which files were modified by LLM
+		const taskMetadata = await fileContextTracker.getTaskMetadata(taskId)
+
+		// Get files that were modified by LLM (record_source: "roo_edited")
+		const llmModifiedFiles = new Set(
+			taskMetadata.files_in_context
+				.filter((entry) => entry.record_source === "roo_edited")
+				.map((entry) => entry.path),
+		)
+
+		// Filter changeset to only include LLM-modified files
+		const filteredFiles = this.changeset.files.filter(
+			(file) =>
+				llmModifiedFiles.has(file.uri) &&
+				!this.acceptedFiles.has(file.uri) &&
+				!this.rejectedFiles.has(file.uri),
 		)
 
 		return {
