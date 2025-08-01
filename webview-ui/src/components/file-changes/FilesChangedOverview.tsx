@@ -159,6 +159,25 @@ const FilesChangedOverview: React.FC = () => {
 		return () => window.removeEventListener("message", handleMessage)
 	}, [checkInit, updateChangeset, handleCheckpointCreated, handleCheckpointRestored])
 
+	// Track previous filesChangedEnabled state to detect enable events
+	const prevFilesChangedEnabledRef = React.useRef<boolean>(filesChangedEnabled)
+
+	// Detect when FCO is enabled mid-task and request fresh file changes
+	React.useEffect(() => {
+		const prevEnabled = prevFilesChangedEnabledRef.current
+		const currentEnabled = filesChangedEnabled
+
+		// Update ref for next comparison
+		prevFilesChangedEnabledRef.current = currentEnabled
+
+		// Detect enable event (transition from false to true)
+		if (!prevEnabled && currentEnabled) {
+			// FCO was just enabled - request fresh file changes from backend
+			// Backend will handle baseline reset and send appropriate files
+			vscode.postMessage({ type: "filesChangedRequest" })
+		}
+	}, [filesChangedEnabled])
+
 	/**
 	 * Formats line change counts for display based on file type
 	 * @param file - The file change to format
