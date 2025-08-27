@@ -3,9 +3,7 @@ import { FileChangeset, FileChange } from "@roo-code/types"
 import { useTranslation } from "react-i18next"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
-
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-interface FilesChangedOverviewProps {}
+import { useDebouncedAction } from "@/components/ui/hooks/useDebouncedAction"
 
 interface _CheckpointEventData {
 	type: "checkpoint_created" | "checkpoint_restored"
@@ -18,7 +16,7 @@ interface _CheckpointEventData {
  * and displays file changes. It manages its own state and communicates with the backend
  * through VS Code message passing.
  */
-const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
+const FilesChangedOverview: React.FC = () => {
 	const { t } = useTranslation()
 	const { filesChangedEnabled } = useExtensionState()
 
@@ -52,24 +50,13 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 	const totalHeight = shouldVirtualize ? files.length * ITEM_HEIGHT : "auto"
 	const offsetY = shouldVirtualize ? Math.floor(scrollTop / ITEM_HEIGHT) * ITEM_HEIGHT : 0
 
-	// Simple double-click prevention
-	const [isProcessing, setIsProcessing] = React.useState(false)
-	const timeoutRef = React.useRef<NodeJS.Timeout | null>(null)
-
-	// Cleanup timeout on unmount
-	React.useEffect(() => {
-		return () => {
-			if (timeoutRef.current) {
-				clearTimeout(timeoutRef.current)
-			}
-		}
-	}, [])
+	// Debounced click handling for double-click prevention
+	const { isProcessing, handleWithDebounce } = useDebouncedAction(300)
 
 	// FCO initialization logic
 	const checkInit = React.useCallback(
-		(baseCheckpoint: string) => {
+		(_baseCheckpoint: string) => {
 			if (!isInitialized) {
-				console.log("[FCO] Initializing with base checkpoint:", baseCheckpoint)
 				setIsInitialized(true)
 			}
 		},
@@ -94,9 +81,7 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 	)
 
 	// Handle checkpoint restoration with the 4 examples logic
-	const handleCheckpointRestored = React.useCallback((restoredCheckpoint: string) => {
-		console.log("[FCO] Handling checkpoint restore to:", restoredCheckpoint)
-
+	const handleCheckpointRestored = React.useCallback((_restoredCheckpoint: string) => {
 		// Request file changes after checkpoint restore
 		// Backend should calculate changes from initial baseline to restored checkpoint
 		vscode.postMessage({ type: "filesChangedRequest" })
@@ -128,25 +113,6 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 		// Backend will send updated filesChanged message with filtered results
 	}, [files])
 
-	const handleWithDebounce = React.useCallback(
-		async (operation: () => void) => {
-			if (isProcessing) return
-			setIsProcessing(true)
-			try {
-				operation()
-			} catch (_error) {
-				// Silently handle any errors to prevent crashing
-				// Debug logging removed for production
-			}
-			// Brief delay to prevent double-clicks
-			if (timeoutRef.current) {
-				clearTimeout(timeoutRef.current)
-			}
-			timeoutRef.current = setTimeout(() => setIsProcessing(false), 300)
-		},
-		[isProcessing],
-	)
-
 	/**
 	 * Handles scroll events for virtualization
 	 * Updates scrollTop state to calculate visible items
@@ -167,14 +133,12 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 
 			// Guard against null/undefined/malformed messages
 			if (!message || typeof message !== "object" || !message.type) {
-				console.debug("[FCO] Ignoring malformed message:", message)
 				return
 			}
 
 			switch (message.type) {
 				case "filesChanged":
 					if (message.filesChanged) {
-						console.log("[FCO] Received filesChanged message:", message.filesChanged)
 						checkInit(message.filesChanged.baseCheckpoint)
 						updateChangeset(message.filesChanged)
 					} else {
@@ -183,11 +147,9 @@ const FilesChangedOverview: React.FC<FilesChangedOverviewProps> = () => {
 					}
 					break
 				case "checkpoint_created":
-					console.log("[FCO] Checkpoint created:", message.checkpoint)
 					handleCheckpointCreated(message.checkpoint, message.previousCheckpoint)
 					break
 				case "checkpoint_restored":
-					console.log("[FCO] Checkpoint restored:", message.checkpoint)
 					handleCheckpointRestored(message.checkpoint)
 					break
 			}

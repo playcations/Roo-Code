@@ -50,8 +50,9 @@ import {
 } from "@src/components/ui"
 
 import { Tab, TabContent, TabHeader, TabList, TabTrigger } from "../common/Tab"
-import { SetCachedStateField, SetExperimentEnabled } from "./types"
+import { SetExperimentEnabled } from "./types"
 import { SectionHeader } from "./SectionHeader"
+import type { SetCachedStateField } from "./types"
 import ApiConfigManager from "./ApiConfigManager"
 import ApiOptions from "./ApiOptions"
 import { AutoApproveSettings } from "./AutoApproveSettings"
@@ -693,12 +694,7 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 					)}
 
 					{/* UI Section */}
-					{activeTab === "ui" && (
-						<UISettings
-							filesChangedEnabled={filesChangedEnabled}
-							setCachedStateField={setCachedStateField}
-						/>
-					)}
+					{activeTab === "ui" && <UISettings />}
 
 					{/* Terminal Section */}
 					{activeTab === "terminal" && (
@@ -732,7 +728,12 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 					{/* Experimental Section */}
 					{activeTab === "experimental" && (
-						<ExperimentalSettings setExperimentEnabled={setExperimentEnabled} experiments={experiments} />
+						<ExperimentalSettings
+							setExperimentEnabled={setExperimentEnabled}
+							experiments={experiments}
+							filesChangedEnabled={filesChangedEnabled}
+							setCachedStateField={setCachedStateField as SetCachedStateField<"filesChangedEnabled">}
+						/>
 					)}
 
 					{/* Language Section */}
