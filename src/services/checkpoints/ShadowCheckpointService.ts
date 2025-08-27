@@ -90,7 +90,26 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 			this.log(`[${this.constructor.name}#initShadowGit] shadow git repo already exists at ${this.dotGitDir}`)
 			const worktree = await this.getShadowGitConfigWorktree(git)
 
-			if (worktree !== this.workspaceDir) {
+			// Normalize and compare paths in a cross-platform safe way (handles:
+			// - Windows path separators
+			// - Case-insensitivity
+			// - Short (8.3) vs long paths via realpath fallback)
+			const normalizeFsPath = (p: string) => {
+				const normalized = path.normalize(p)
+				return process.platform === "win32" ? normalized.toLowerCase() : normalized
+			}
+			const pathsEqual = async (a?: string, b?: string) => {
+				if (!a || !b) return false
+				try {
+					const [ra, rb] = await Promise.all([fs.realpath(a), fs.realpath(b)])
+					return normalizeFsPath(ra) === normalizeFsPath(rb)
+				} catch {
+					return normalizeFsPath(a) === normalizeFsPath(b)
+				}
+			}
+
+			const sameWorkspace = await pathsEqual(worktree, this.workspaceDir)
+			if (!sameWorkspace) {
 				throw new Error(
 					`Checkpoints can only be used in the original workspace: ${worktree} !== ${this.workspaceDir}`,
 				)
