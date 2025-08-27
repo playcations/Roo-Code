@@ -47,6 +47,7 @@ export interface WebviewMessage {
 		| "alwaysAllowUpdateTodoList"
 		| "followupAutoApproveTimeoutMs"
 		| "webviewDidLaunch"
+		| "webviewReady"
 		| "newTask"
 		| "askResponse"
 		| "terminalOperation"
@@ -212,6 +213,14 @@ export interface WebviewMessage {
 		| "createCommand"
 		| "insertTextIntoTextarea"
 		| "showMdmAuthRequiredNotification"
+		| "viewDiff"
+		| "acceptFileChange"
+		| "rejectFileChange"
+		| "acceptAllFileChanges"
+		| "rejectAllFileChanges"
+		| "filesChangedEnabled"
+		| "filesChangedRequest"
+		| "filesChangedBaselineUpdate"
 	text?: string
 	editedMessageContent?: string
 	tab?: "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "account"
@@ -281,6 +290,17 @@ export interface WebviewMessage {
 		codebaseIndexMistralApiKey?: string
 		codebaseIndexVercelAiGatewayApiKey?: string
 	}
+	command?: string // Added for new message types sent from webview
+	uri?: string // Added for file URIs in new message types
+	uris?: string[] // For rejectAllFileChanges to specify which files to reject
+	baseline?: string // For filesChangedBaselineUpdate message
+	fileChanges?: Array<{ uri: string; type: string }> // For filesChangedRequest message
+}
+
+export interface Terminal {
+	pid: number
+	name: string
+	cwd: string
 }
 
 export const checkoutDiffPayloadSchema = z.object({

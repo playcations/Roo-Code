@@ -9,6 +9,8 @@ import type {
 	ClineMessage,
 	MarketplaceItem,
 	TodoItem,
+	ClineSay,
+	FileChangeset,
 } from "@roo-code/types"
 import type { CloudUserInfo, OrganizationAllowList, ShareVisibility } from "@roo-code/cloud"
 
@@ -120,6 +122,10 @@ export interface ExtensionMessage {
 		| "showEditMessageDialog"
 		| "commands"
 		| "insertTextIntoTextarea"
+		| "filesChanged"
+		| "checkpoint_created"
+		| "checkpoint_restored"
+		| "say"
 	text?: string
 	payload?: any // Add a generic payload for now, can refine later
 	action?:
@@ -194,6 +200,10 @@ export interface ExtensionMessage {
 	messageTs?: number
 	context?: string
 	commands?: Command[]
+	filesChanged?: FileChangeset // Added filesChanged property
+	checkpoint?: string // For checkpoint_created and checkpoint_restored messages
+	previousCheckpoint?: string // For checkpoint_created message
+	say?: ClineSay // Added say property
 }
 
 export type ExtensionState = Pick<
@@ -324,6 +334,7 @@ export type ExtensionState = Pick<
 	marketplaceInstalledMetadata?: { project: Record<string, any>; global: Record<string, any> }
 	profileThresholds: Record<string, number>
 	hasOpenedModeSelector: boolean
+	filesChangedEnabled: boolean
 }
 
 export interface ClineSayTool {
