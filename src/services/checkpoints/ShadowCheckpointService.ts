@@ -77,7 +77,9 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		}
 
 		await fs.mkdir(this.checkpointsDir, { recursive: true })
-		const git = simpleGit(this.workspaceDir, { binary: "git" }).env("GIT_DIR", this.dotGitDir)
+		const git = simpleGit(this.workspaceDir, { binary: "git" })
+			.env("GIT_DIR", this.dotGitDir)
+			.env("GIT_WORK_TREE", this.workspaceDir)
 		const gitVersion = await git.version()
 		this.log(`[${this.constructor.name}#create] git = ${gitVersion}`)
 
@@ -123,7 +125,7 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		} else {
 			this.log(`[${this.constructor.name}#initShadowGit] creating shadow git repo at ${this.checkpointsDir}`)
 			await git.init()
-			await git.addConfig("core.worktree", this.workspaceDir) // Sets the working tree to the current workspace.
+			// Use GIT_WORK_TREE environment (set on the git instance) instead of core.worktree to avoid platform-specific issues
 			await git.addConfig("commit.gpgSign", "false") // Disable commit signing for shadow repo.
 			await git.addConfig("user.name", "Roo Code")
 			await git.addConfig("user.email", "noreply@example.com")

@@ -35,7 +35,7 @@ export class FCOMessageHandler {
 	 * Handle FCO-specific messages
 	 */
 	public async handleMessage(message: WebviewMessage): Promise<void> {
-		const task = this.provider.getCurrentCline()
+		const task = this.provider.getCurrentTask()
 
 		switch (message.type) {
 			case "webviewReady": {
@@ -206,7 +206,7 @@ export class FCOMessageHandler {
 			}
 
 			// Get the current task and checkpoint service
-			const currentTask = this.provider.getCurrentCline()
+			const currentTask = this.provider.getCurrentTask()
 			if (!currentTask) {
 				console.error(`[FCO] No current task found for file reversion`)
 				return
@@ -278,7 +278,7 @@ export class FCOMessageHandler {
 				: changeset.files
 
 			// Get the current task and checkpoint service
-			const currentTask = this.provider.getCurrentCline()
+			const currentTask = this.provider.getCurrentTask()
 			if (!currentTask) {
 				console.error(`[FCO] No current task found for file reversion`)
 				return
