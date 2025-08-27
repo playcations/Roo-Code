@@ -328,7 +328,8 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		this.log(`[${this.constructor.name}#getDiff] diffing ${to ? `${from}..${to}` : `${from}..HEAD`}`)
 		const { files } = to ? await this.git.diffSummary([`${from}..${to}`]) : await this.git.diffSummary([from])
 
-		const cwdPath = (await this.getShadowGitConfigWorktree(this.git)) || this.workspaceDir || ""
+		// Always use the provided workspaceDir to avoid symlink-induced path mismatches (e.g., /tmp vs /private/tmp)
+		const cwdPath = this.workspaceDir
 
 		for (const file of files) {
 			const relPath = file.file
