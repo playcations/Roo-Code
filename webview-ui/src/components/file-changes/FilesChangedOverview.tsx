@@ -203,27 +203,11 @@ const FilesChangedOverview: React.FC = () => {
 
 	return (
 		<div
-			className="files-changed-overview"
-			data-testid="files-changed-overview"
-			style={{
-				border: "1px solid var(--vscode-panel-border)",
-				borderRadius: "4px",
-				padding: "12px",
-				margin: "8px 0",
-				backgroundColor: "var(--vscode-editor-background)",
-			}}>
+			className="files-changed-overview border border-vscode-panel-border rounded p-3 my-2 bg-vscode-editor-background"
+			data-testid="files-changed-overview">
 			{/* Collapsible header */}
 			<div
-				style={{
-					display: "flex",
-					justifyContent: "space-between",
-					alignItems: "center",
-					marginBottom: isCollapsed ? "0" : "12px",
-					borderBottom: isCollapsed ? "none" : "1px solid var(--vscode-panel-border)",
-					paddingBottom: "8px",
-					cursor: "pointer",
-					userSelect: "none",
-				}}
+				className={`flex justify-between items-center ${isCollapsed ? "" : "mb-3 border-b border-vscode-panel-border pb-2"} cursor-pointer select-none`}
 				onClick={() => setIsCollapsed(!isCollapsed)}
 				onKeyDown={(e) => {
 					if (e.key === "Enter" || e.key === " ") {
@@ -241,15 +225,11 @@ const FilesChangedOverview: React.FC = () => {
 						: t("file-changes:accessibility.expanded"),
 				})}
 				title={isCollapsed ? t("file-changes:header.expand") : t("file-changes:header.collapse")}>
-				<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+				<div className="flex items-center gap-2">
 					<span
-						className={`codicon ${isCollapsed ? "codicon-chevron-right" : "codicon-chevron-down"}`}
-						style={{
-							fontSize: "12px",
-							transition: "transform 0.2s ease",
-						}}
+						className={`codicon ${isCollapsed ? "codicon-chevron-right" : "codicon-chevron-down"} text-[12px] transition-transform`}
 					/>
-					<h3 style={{ margin: 0, fontSize: "14px", fontWeight: "bold" }} data-testid="files-changed-header">
+					<h3 className="m-0 text-sm font-bold" data-testid="files-changed-header">
 						{t("file-changes:summary.count_with_changes", {
 							count: files.length,
 							changes: totalChanges,
@@ -259,7 +239,7 @@ const FilesChangedOverview: React.FC = () => {
 
 				{/* Action buttons always visible for quick access */}
 				<div
-					style={{ display: "flex", gap: "8px" }}
+					className="flex gap-2"
 					onClick={(e) => e.stopPropagation()} // Prevent collapse toggle when clicking buttons
 				>
 					<button
@@ -267,16 +247,7 @@ const FilesChangedOverview: React.FC = () => {
 						disabled={isProcessing}
 						tabIndex={0}
 						data-testid="reject-all-button"
-						style={{
-							backgroundColor: "var(--vscode-button-secondaryBackground)",
-							color: "var(--vscode-button-secondaryForeground)",
-							border: "none",
-							borderRadius: "3px",
-							padding: "4px 8px",
-							fontSize: "12px",
-							cursor: isProcessing ? "not-allowed" : "pointer",
-							opacity: isProcessing ? 0.6 : 1,
-						}}
+						className={`bg-vscode-button-secondaryBackground text-vscode-button-secondaryForeground border border-vscode-button-border rounded px-2 py-1 text-xs ${isProcessing ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
 						title={t("file-changes:actions.reject_all")}>
 						{t("file-changes:actions.reject_all")}
 					</button>
@@ -285,16 +256,7 @@ const FilesChangedOverview: React.FC = () => {
 						disabled={isProcessing}
 						tabIndex={0}
 						data-testid="accept-all-button"
-						style={{
-							backgroundColor: "var(--vscode-button-background)",
-							color: "var(--vscode-button-foreground)",
-							border: "none",
-							borderRadius: "3px",
-							padding: "4px 8px",
-							fontSize: "12px",
-							cursor: isProcessing ? "not-allowed" : "pointer",
-							opacity: isProcessing ? 0.6 : 1,
-						}}
+						className={`bg-vscode-button-background text-vscode-button-foreground border border-vscode-button-border rounded px-2 py-1 text-xs ${isProcessing ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
 						title={t("file-changes:actions.accept_all")}>
 						{t("file-changes:actions.accept_all")}
 					</button>
@@ -304,13 +266,7 @@ const FilesChangedOverview: React.FC = () => {
 			{/* Collapsible content area */}
 			{!isCollapsed && (
 				<div
-					style={{
-						maxHeight: "300px",
-						overflowY: "auto",
-						transition: "opacity 0.2s ease-in-out",
-						opacity: isCollapsed ? 0 : 1,
-						position: "relative",
-					}}
+					className={`max-h-[300px] overflow-y-auto transition-opacity duration-200 ease-in-out ${isCollapsed ? "opacity-0" : "opacity-100"} relative`}
 					onScroll={handleScroll}>
 					{shouldVirtualize && (
 						<div style={{ height: totalHeight, position: "relative" }}>
@@ -382,56 +338,23 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 	({ file, formatLineChanges, onViewDiff, onAcceptFile, onRejectFile, handleWithDebounce, isProcessing, t }) => (
 		<div
 			data-testid={`file-item-${file.uri}`}
-			style={{
-				display: "flex",
-				justifyContent: "space-between",
-				alignItems: "center",
-				padding: "6px 8px",
-				marginBottom: "4px",
-				backgroundColor: "var(--vscode-list-hoverBackground)",
-				borderRadius: "3px",
-				fontSize: "13px",
-				minHeight: "60px", // Consistent height for virtualization
-			}}>
-			<div style={{ flex: 1, minWidth: 0 }}>
-				<div
-					style={{
-						fontFamily: "var(--vscode-editor-font-family)",
-						fontSize: "12px",
-						color: "var(--vscode-editor-foreground)",
-						overflow: "hidden",
-						textOverflow: "ellipsis",
-						whiteSpace: "nowrap",
-					}}>
+			className="flex justify-between items-center px-2 py-1.5 mb-1 bg-vscode-list-hoverBackground rounded text-[13px] min-h-[60px]">
+			<div className="flex-1 min-w-0">
+				<div className="text-xs text-vscode-editor-foreground overflow-hidden text-ellipsis whitespace-nowrap">
 					{file.uri}
 				</div>
-				<div
-					style={{
-						fontSize: "11px",
-						color: "var(--vscode-descriptionForeground)",
-						marginTop: "2px",
-					}}>
+				<div className="text-[11px] text-vscode-descriptionForeground mt-0.5">
 					{t(`file-changes:file_types.${file.type}`)} • {formatLineChanges(file)}
 				</div>
 			</div>
 
-			<div style={{ display: "flex", gap: "4px", marginLeft: "8px" }}>
+			<div className="flex gap-1 ml-2">
 				<button
 					onClick={() => handleWithDebounce(() => onViewDiff(file.uri))}
 					disabled={isProcessing}
 					title={t("file-changes:actions.view_diff")}
 					data-testid={`diff-${file.uri}`}
-					style={{
-						backgroundColor: "transparent",
-						color: "var(--vscode-button-foreground)",
-						border: "1px solid var(--vscode-button-border)",
-						borderRadius: "3px",
-						padding: "2px 6px",
-						fontSize: "11px",
-						cursor: isProcessing ? "not-allowed" : "pointer",
-						minWidth: "50px",
-						opacity: isProcessing ? 0.6 : 1,
-					}}>
+					className={`bg-transparent text-vscode-button-foreground border border-vscode-button-border rounded px-1.5 py-0.5 text-[11px] min-w-[50px] ${isProcessing ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}>
 					{t("file-changes:actions.view_diff")}
 				</button>
 				<button
@@ -439,17 +362,7 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 					disabled={isProcessing}
 					title={t("file-changes:actions.reject_file")}
 					data-testid={`reject-${file.uri}`}
-					style={{
-						backgroundColor: "var(--vscode-button-secondaryBackground)",
-						color: "var(--vscode-button-secondaryForeground)",
-						border: "1px solid var(--vscode-button-border)",
-						borderRadius: "3px",
-						padding: "2px 6px",
-						fontSize: "11px",
-						cursor: isProcessing ? "not-allowed" : "pointer",
-						minWidth: "20px",
-						opacity: isProcessing ? 0.6 : 1,
-					}}>
+					className={`bg-vscode-button-secondaryBackground text-vscode-button-secondaryForeground border border-vscode-button-border rounded px-1.5 py-0.5 text-[11px] min-w-[20px] ${isProcessing ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}>
 					✗
 				</button>
 				<button
@@ -457,17 +370,7 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 					disabled={isProcessing}
 					title={t("file-changes:actions.accept_file")}
 					data-testid={`accept-${file.uri}`}
-					style={{
-						backgroundColor: "var(--vscode-button-background)",
-						color: "var(--vscode-button-foreground)",
-						border: "1px solid var(--vscode-button-border)",
-						borderRadius: "3px",
-						padding: "2px 6px",
-						fontSize: "11px",
-						cursor: isProcessing ? "not-allowed" : "pointer",
-						minWidth: "20px",
-						opacity: isProcessing ? 0.6 : 1,
-					}}>
+					className={`bg-vscode-button-background text-vscode-button-foreground border border-vscode-button-border rounded px-1.5 py-0.5 text-[11px] min-w-[20px] ${isProcessing ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}>
 					✓
 				</button>
 			</div>
