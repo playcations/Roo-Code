@@ -11,8 +11,10 @@ import type {
 	TodoItem,
 	ClineSay,
 	FileChangeset,
+	CloudUserInfo,
+	OrganizationAllowList,
+	ShareVisibility,
 } from "@roo-code/types"
-import type { CloudUserInfo, OrganizationAllowList, ShareVisibility } from "@roo-code/cloud"
 
 import { GitCommit } from "../utils/git"
 
