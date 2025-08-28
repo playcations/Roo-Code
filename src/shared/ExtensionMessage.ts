@@ -57,9 +57,12 @@ export interface LanguageModelChatSelector {
 	id?: string
 }
 
-// Represents JSON data that is sent from extension to webview, called
-// ExtensionMessage and has 'type' enum which can be 'plusButtonClicked' or
-// 'settingsButtonClicked' or 'hello'. Webview will hold state.
+/**
+ * Message sent from the VS Code extension to the webview UI.
+ * The 'type' union below enumerates outbound notifications and data updates
+ * (e.g., "state", "theme", "indexingStatusUpdate", "filesChanged") that the
+ * webview consumes to render and synchronize state. See the full union below.
+ */
 export interface ExtensionMessage {
 	type:
 		| "action"
