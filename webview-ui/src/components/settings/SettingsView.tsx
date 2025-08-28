@@ -724,8 +724,10 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 						<ExperimentalSettings
 							setExperimentEnabled={setExperimentEnabled}
 							experiments={experiments}
-							filesChangedEnabled={filesChangedEnabled}
-							setCachedStateField={setCachedStateField as SetCachedStateField<"filesChangedEnabled">}
+			filesChangedEnabled={filesChangedEnabled}
+			setCachedStateField={setCachedStateField as SetCachedStateField<"filesChangedEnabled">}
+			apiConfiguration={apiConfiguration}
+			setApiConfigurationField={setApiConfigurationField}
 						/>
 					)}
 
