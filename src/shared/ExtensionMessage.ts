@@ -286,6 +286,7 @@ export type ExtensionState = Pick<
 	| "includeDiagnosticMessages"
 	| "maxDiagnosticMessages"
 	| "remoteControlEnabled"
+	| "openRouterImageGenerationSelectedModel"
 > & {
 	version: string
 	clineMessages: ClineMessage[]
@@ -340,6 +341,7 @@ export type ExtensionState = Pick<
 	profileThresholds: Record<string, number>
 	hasOpenedModeSelector: boolean
 	filesChangedEnabled: boolean
+	openRouterImageApiKey?: string
 }
 
 export interface ClineSayTool {

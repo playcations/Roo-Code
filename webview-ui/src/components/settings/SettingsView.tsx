@@ -183,6 +183,8 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 		maxDiagnosticMessages,
 		includeTaskHistoryInEnhance,
 		filesChangedEnabled,
+		openRouterImageApiKey,
+		openRouterImageGenerationSelectedModel,
 	} = cachedState
 
 	const apiConfiguration = useMemo(() => cachedState.apiConfiguration ?? {}, [cachedState.apiConfiguration])
@@ -259,6 +261,20 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 			setChangeDetected(true)
 			return { ...prevState, telemetrySetting: setting }
+		})
+	}, [])
+
+	const setOpenRouterImageApiKey = useCallback((apiKey: string) => {
+		setCachedState((prevState) => {
+			setChangeDetected(true)
+			return { ...prevState, openRouterImageApiKey: apiKey }
+		})
+	}, [])
+
+	const setImageGenerationSelectedModel = useCallback((model: string) => {
+		setCachedState((prevState) => {
+			setChangeDetected(true)
+			return { ...prevState, openRouterImageGenerationSelectedModel: model }
 		})
 	}, [])
 
@@ -346,6 +362,11 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 			vscode.postMessage({ type: "upsertApiConfiguration", text: currentApiConfigName, apiConfiguration })
 			vscode.postMessage({ type: "telemetrySetting", text: telemetrySetting })
 			vscode.postMessage({ type: "profileThresholds", values: profileThresholds })
+			vscode.postMessage({ type: "openRouterImageApiKey", text: openRouterImageApiKey })
+			vscode.postMessage({
+				type: "openRouterImageGenerationSelectedModel",
+				text: openRouterImageGenerationSelectedModel,
+			})
 			setChangeDetected(false)
 		}
 	}
@@ -724,10 +745,16 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 						<ExperimentalSettings
 							setExperimentEnabled={setExperimentEnabled}
 							experiments={experiments}
-			filesChangedEnabled={filesChangedEnabled}
-			setCachedStateField={setCachedStateField as SetCachedStateField<"filesChangedEnabled">}
-			apiConfiguration={apiConfiguration}
-			setApiConfigurationField={setApiConfigurationField}
+							filesChangedEnabled={filesChangedEnabled}
+							setCachedStateField={setCachedStateField as SetCachedStateField<"filesChangedEnabled">}
+							apiConfiguration={apiConfiguration}
+							setApiConfigurationField={setApiConfigurationField}
+							openRouterImageApiKey={openRouterImageApiKey as string | undefined}
+							openRouterImageGenerationSelectedModel={
+								openRouterImageGenerationSelectedModel as string | undefined
+							}
+							setOpenRouterImageApiKey={setOpenRouterImageApiKey}
+							setImageGenerationSelectedModel={setImageGenerationSelectedModel}
 						/>
 					)}
 

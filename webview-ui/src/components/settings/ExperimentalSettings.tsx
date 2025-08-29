@@ -23,6 +23,10 @@ type ExperimentalSettingsProps = HTMLAttributes<HTMLDivElement> & {
 	setCachedStateField?: SetCachedStateField<"filesChangedEnabled">
 	apiConfiguration?: any
 	setApiConfigurationField?: any
+	openRouterImageApiKey?: string
+	openRouterImageGenerationSelectedModel?: string
+	setOpenRouterImageApiKey?: (apiKey: string) => void
+	setImageGenerationSelectedModel?: (model: string) => void
 }
 
 export const ExperimentalSettings = ({
@@ -32,6 +36,10 @@ export const ExperimentalSettings = ({
 	setCachedStateField,
 	apiConfiguration,
 	setApiConfigurationField,
+	openRouterImageApiKey,
+	openRouterImageGenerationSelectedModel,
+	setOpenRouterImageApiKey,
+	setImageGenerationSelectedModel,
 	className,
 	...props
 }: ExperimentalSettingsProps) => {
@@ -80,7 +88,11 @@ export const ExperimentalSettings = ({
 								/>
 							)
 						}
-						if (config[0] === "IMAGE_GENERATION" && apiConfiguration && setApiConfigurationField) {
+						if (
+							config[0] === "IMAGE_GENERATION" &&
+							setOpenRouterImageApiKey &&
+							setImageGenerationSelectedModel
+						) {
 							return (
 								<ImageGenerationSettings
 									key={config[0]}
@@ -88,8 +100,10 @@ export const ExperimentalSettings = ({
 									onChange={(enabled) =>
 										setExperimentEnabled(EXPERIMENT_IDS.IMAGE_GENERATION, enabled)
 									}
-									apiConfiguration={apiConfiguration}
-									setApiConfigurationField={setApiConfigurationField}
+									openRouterImageApiKey={openRouterImageApiKey}
+									openRouterImageGenerationSelectedModel={openRouterImageGenerationSelectedModel}
+									setOpenRouterImageApiKey={setOpenRouterImageApiKey}
+									setImageGenerationSelectedModel={setImageGenerationSelectedModel}
 								/>
 							)
 						}
