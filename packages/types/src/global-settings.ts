@@ -179,6 +179,7 @@ export const SECRET_STATE_KEYS = [
 	"awsSecretKey",
 	"awsSessionToken",
 	"openAiApiKey",
+	"ollamaApiKey",
 	"geminiApiKey",
 	"openAiNativeApiKey",
 	"cerebrasApiKey",
