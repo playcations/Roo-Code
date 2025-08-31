@@ -413,7 +413,7 @@ export class FCOMessageHandler {
 
 		// Detect enable event (transition from false to true) during active task
 		if (!previousFilesChangedEnabled && filesChangedEnabled) {
-			const currentTask = this.provider.getCurrentCline()
+			const currentTask = this.provider.getCurrentTask()
 			if (currentTask && currentTask.taskId) {
 				try {
 					await this.handleFCOEnableResetBaseline(currentTask)

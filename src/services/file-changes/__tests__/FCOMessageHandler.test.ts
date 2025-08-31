@@ -75,7 +75,9 @@ describe("FCOMessageHandler", () => {
 		vi.clearAllMocks()
 
 		// Setup getCheckpointService mock
-		vi.mocked(getCheckpointService).mockImplementation((task) => task?.checkpointService || undefined)
+		vi.mocked(getCheckpointService).mockImplementation((task) =>
+			Promise.resolve(task?.checkpointService || undefined),
+		)
 
 		// Reset checkpointSave mock
 		vi.mocked(checkpointSave).mockReset()
