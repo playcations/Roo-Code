@@ -123,7 +123,7 @@ describe("FCOMessageHandler", () => {
 
 		// Mock ClineProvider
 		mockProvider = {
-			getCurrentCline: vi.fn().mockReturnValue(mockTask),
+			getCurrentTask: vi.fn().mockReturnValue(mockTask),
 			getFileChangeManager: vi.fn().mockReturnValue(mockFileChangeManager),
 			ensureFileChangeManager: vi.fn().mockResolvedValue(mockFileChangeManager),
 			postMessageToWebview: vi.fn(),
@@ -222,7 +222,7 @@ describe("FCOMessageHandler", () => {
 		})
 
 		it("should handle missing task gracefully", async () => {
-			mockProvider.getCurrentCline.mockReturnValue(null)
+			mockProvider.getCurrentTask.mockReturnValue(null)
 
 			await handler.handleMessage({ type: "webviewReady" } as WebviewMessage)
 
@@ -302,7 +302,7 @@ describe("FCOMessageHandler", () => {
 		})
 
 		it("should handle missing dependencies", async () => {
-			mockProvider.getCurrentCline.mockReturnValue(null)
+			mockProvider.getCurrentTask.mockReturnValue(null)
 
 			await handler.handleMessage(mockMessage)
 
@@ -745,7 +745,7 @@ describe("FCOMessageHandler", () => {
 			// Mock previous state as disabled
 			mockProvider.getGlobalState.mockReturnValue(false)
 			// Mock no active task
-			mockProvider.getCurrentCline.mockReturnValue(null)
+			mockProvider.getCurrentTask.mockReturnValue(null)
 
 			await handler.handleMessage({
 				type: "filesChangedEnabled",

@@ -1,5 +1,5 @@
 // Tests for simplified FileChangeManager - Pure diff calculation service
-// npx vitest run src/services/file-changes/__tests__/FileChangeManager.simplified.test.ts
+// npx vitest run src/services/file-changes/__tests__/FileChangeManager.test.ts
 
 import { describe, beforeEach, afterEach, it, expect, vi } from "vitest"
 import { FileChangeManager } from "../FileChangeManager"
@@ -323,6 +323,76 @@ describe("FileChangeManager (Simplified)", () => {
 
 			expect(result.linesAdded).toBe(0)
 			expect(result.linesRemoved).toBe(0)
+		})
+
+		it("should handle line modifications (search and replace)", () => {
+			const original = "function test() {\n  return 'old';\n}"
+			const modified = "function test() {\n  return 'new';\n}"
+
+			const result = FileChangeManager.calculateLineDifferences(original, modified)
+
+			expect(result.linesAdded).toBe(1) // Modified line counts as added
+			expect(result.linesRemoved).toBe(1) // Modified line counts as removed
+		})
+
+		it("should handle mixed changes", () => {
+			const original = "line1\nold_line\nline3"
+			const modified = "line1\nnew_line\nline3\nextra_line"
+
+			const result = FileChangeManager.calculateLineDifferences(original, modified)
+
+			expect(result.linesAdded).toBe(2) // 1 modified + 1 added
+			expect(result.linesRemoved).toBe(1) // 1 modified
+		})
+
+		it("should handle empty original file", () => {
+			const original = ""
+			const modified = "line1\nline2\nline3"
+
+			const result = FileChangeManager.calculateLineDifferences(original, modified)
+
+			expect(result.linesAdded).toBe(3)
+			expect(result.linesRemoved).toBe(0)
+		})
+
+		it("should handle empty modified file", () => {
+			const original = "line1\nline2\nline3"
+			const modified = ""
+
+			const result = FileChangeManager.calculateLineDifferences(original, modified)
+
+			expect(result.linesAdded).toBe(0)
+			expect(result.linesRemoved).toBe(3)
+		})
+
+		it("should handle both files empty", () => {
+			const original = ""
+			const modified = ""
+
+			const result = FileChangeManager.calculateLineDifferences(original, modified)
+
+			expect(result.linesAdded).toBe(0)
+			expect(result.linesRemoved).toBe(0)
+		})
+
+		it("should handle single line files", () => {
+			const original = "single line"
+			const modified = "different line"
+
+			const result = FileChangeManager.calculateLineDifferences(original, modified)
+
+			expect(result.linesAdded).toBe(1)
+			expect(result.linesRemoved).toBe(1)
+		})
+
+		it("should handle whitespace-only changes", () => {
+			const original = "line1\n  indented\nline3"
+			const modified = "line1\n    indented\nline3"
+
+			const result = FileChangeManager.calculateLineDifferences(original, modified)
+
+			expect(result.linesAdded).toBe(1) // Whitespace change counts as modification
+			expect(result.linesRemoved).toBe(1)
 		})
 	})
 

@@ -147,7 +147,10 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		} else {
 			this.log(`[${this.constructor.name}#initShadowGit] creating shadow git repo at ${this.checkpointsDir}`)
 			await git.init()
-			// Use GIT_WORK_TREE environment (set on the git instance) instead of core.worktree to avoid platform-specific issues
+			await git.addConfig("core.worktree", this.workspaceDir) // Sets the working tree to the current workspace.
+			// Fix Windows Git configuration conflict: explicitly set core.bare=false when using core.worktree
+			// This resolves "core.bare and core.worktree do not make sense" error on Windows
+			await git.addConfig("core.bare", "false")
 			await git.addConfig("commit.gpgSign", "false") // Disable commit signing for shadow repo.
 			await git.addConfig("user.name", "Roo Code")
 			await git.addConfig("user.email", "noreply@example.com")
@@ -334,6 +337,17 @@ export abstract class ShadowCheckpointService extends EventEmitter {
 		for (const file of files) {
 			const relPath = file.file
 			const absPath = path.join(cwdPath, relPath)
+
+			// Filter out directories - only include actual files
+			try {
+				const stat = await fs.stat(absPath)
+				if (stat.isDirectory()) {
+					continue // Skip directories
+				}
+			} catch {
+				// If file doesn't exist (deleted files), continue processing
+			}
+
 			const before = await this.git.show([`${from}:${relPath}`]).catch(() => "")
 
 			const after = await this.git.show([`${to ?? "HEAD"}:${relPath}`]).catch(() => "")

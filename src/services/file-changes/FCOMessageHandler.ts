@@ -45,10 +45,14 @@ export class FCOMessageHandler {
 				if (!fileChangeManager) {
 					fileChangeManager = await this.provider.ensureFileChangeManager()
 				}
-				if (fileChangeManager) {
+				if (fileChangeManager && task?.taskId && task?.fileContextTracker) {
+					const filteredChangeset = await fileChangeManager.getLLMOnlyChanges(
+						task.taskId,
+						task.fileContextTracker,
+					)
 					this.provider.postMessageToWebview({
 						type: "filesChanged",
-						filesChanged: fileChangeManager.getChanges(),
+						filesChanged: filteredChangeset.files.length > 0 ? filteredChangeset : undefined,
 					})
 				}
 				break
@@ -177,15 +181,19 @@ export class FCOMessageHandler {
 	}
 
 	private async handleAcceptFileChange(message: WebviewMessage): Promise<void> {
+		const task = this.provider.getCurrentTask()
 		let acceptFileChangeManager = this.provider.getFileChangeManager()
 		if (!acceptFileChangeManager) {
 			acceptFileChangeManager = await this.provider.ensureFileChangeManager()
 		}
-		if (message.uri && acceptFileChangeManager) {
+		if (message.uri && acceptFileChangeManager && task?.taskId && task?.fileContextTracker) {
 			await acceptFileChangeManager.acceptChange(message.uri)
 
-			// Send updated state
-			const updatedChangeset = acceptFileChangeManager.getChanges()
+			// Send updated state with LLM-only filtering
+			const updatedChangeset = await acceptFileChangeManager.getLLMOnlyChanges(
+				task.taskId,
+				task.fileContextTracker,
+			)
 			this.provider.postMessageToWebview({
 				type: "filesChanged",
 				filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
@@ -218,7 +226,7 @@ export class FCOMessageHandler {
 				return
 			}
 
-			const checkpointService = getCheckpointService(currentTask)
+			const checkpointService = await getCheckpointService(currentTask)
 			if (!checkpointService) {
 				console.error(`[FCO] No checkpoint service available for file reversion`)
 				return
@@ -231,13 +239,18 @@ export class FCOMessageHandler {
 			// Remove from tracking since the file has been reverted
 			await rejectFileChangeManager.rejectChange(message.uri)
 
-			// Send updated state
-			const updatedChangeset = rejectFileChangeManager.getChanges()
-			console.log(`[FCO] After rejection, sending ${updatedChangeset.files.length} files to webview`)
-			this.provider.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
-			})
+			// Send updated state with LLM-only filtering
+			if (currentTask?.taskId && currentTask?.fileContextTracker) {
+				const updatedChangeset = await rejectFileChangeManager.getLLMOnlyChanges(
+					currentTask.taskId,
+					currentTask.fileContextTracker,
+				)
+				console.log(`[FCO] After rejection, sending ${updatedChangeset.files.length} LLM-only files to webview`)
+				this.provider.postMessageToWebview({
+					type: "filesChanged",
+					filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
+				})
+			}
 		} catch (error) {
 			console.error(`[FCO] Error reverting file ${message.uri}:`, error)
 			// Fall back to old behavior (just remove from display) if reversion fails
@@ -290,7 +303,7 @@ export class FCOMessageHandler {
 				return
 			}
 
-			const checkpointService = getCheckpointService(currentTask)
+			const checkpointService = await getCheckpointService(currentTask)
 			if (!checkpointService) {
 				console.error(`[FCO] No checkpoint service available for file reversion`)
 				return
