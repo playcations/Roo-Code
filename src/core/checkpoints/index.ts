@@ -29,12 +29,6 @@ export async function getCheckpointService(
 	if (cline.checkpointService) {
 		return cline.checkpointService
 	}
-	console.log(
-		`[DEBUG] getCheckpointService called for task ${cline.taskId}. Service exists: ${!!cline.checkpointService}`,
-	)
-	if (!cline.enableCheckpoints) {
-		return undefined
-	}
 
 	const provider = cline.providerRef.deref()
 
@@ -47,8 +41,6 @@ export async function getCheckpointService(
 			// NO-OP
 		}
 	}
-
-	console.log("[Task#getCheckpointService] initializing checkpoints service")
 
 	try {
 		const workspaceDir = cline.cwd || getWorkspacePath()
@@ -76,7 +68,6 @@ export async function getCheckpointService(
 		if (cline.checkpointServiceInitializing) {
 			await pWaitFor(
 				() => {
-					console.log("[Task#getCheckpointService] waiting for service to initialize")
 					return !!cline.checkpointService && !!cline?.checkpointService?.isInitialized
 				},
 				{ interval, timeout },
@@ -136,21 +127,10 @@ async function checkGitInstallation(
 
 			try {
 				// Debug logging to understand checkpoint detection
-				console.log("[DEBUG] Checkpoint detection - total messages:", cline.clineMessages.length)
-				console.log(
-					"[DEBUG] Checkpoint detection - message types:",
-					cline.clineMessages.map((m) => ({ ts: m.ts, type: m.type, say: m.say, ask: m.ask })),
-				)
 
 				const checkpointMessages = cline.clineMessages.filter(({ say }) => say === "checkpoint_saved")
-				console.log(
-					"[DEBUG] Found checkpoint messages:",
-					checkpointMessages.length,
-					checkpointMessages.map((m) => ({ ts: m.ts, text: m.text })),
-				)
 
 				const isCheckpointNeeded = checkpointMessages.length === 0
-				console.log("[DEBUG] isCheckpointNeeded result:", isCheckpointNeeded)
 
 				cline.checkpointService = service
 				cline.checkpointServiceInitializing = false
@@ -369,7 +349,6 @@ export async function getInitializedCheckpointService(
 	try {
 		await pWaitFor(
 			() => {
-				console.log("[Task#getCheckpointService] waiting for service to initialize")
 				return service.isInitialized
 			},
 			{ interval, timeout },
@@ -413,19 +392,16 @@ export async function checkpointSave(cline: Task, force = false, files?: vscode.
 
 	// Capture the previous checkpoint BEFORE saving the new one
 	const previousCheckpoint = service.getCurrentCheckpoint()
-	console.log(`[checkpointSave] Previous checkpoint: ${previousCheckpoint}`)
 
 	// Start the checkpoint process in the background and track it
 	const savePromise = service
 		.saveCheckpoint(`Task: ${cline.taskId}, Time: ${Date.now()}`, { allowEmpty: force, files })
 		.then(async (result: any) => {
-			console.log(`[checkpointSave] New checkpoint created: ${result?.commit}`)
-
 			// Notify FCO that checkpoint was created
 			if (provider && result) {
 				try {
 					provider.postMessageToWebview({
-						type: "checkpoint_created",
+						type: "checkpointCreated",
 						checkpoint: result.commit,
 						previousCheckpoint: previousCheckpoint,
 					} as any)
@@ -434,9 +410,6 @@ export async function checkpointSave(cline: Task, force = false, files?: vscode.
 					// to avoid duplicate/conflicting messages that override cumulative tracking.
 					// The checkpointCreated event handler calculates cumulative changes from the baseline
 					// and sends the complete filesChanged message with all accumulated changes.
-					console.log(
-						`[checkpointSave] FCO update delegated to checkpointCreated event for cumulative tracking`,
-					)
 				} catch (error) {
 					console.error("[Task#checkpointSave] Failed to notify FCO of checkpoint creation:", error)
 				}
@@ -515,7 +488,7 @@ export async function checkpointRestore(cline: Task, { ts, commitHash, mode }: C
 		// Notify FCO that checkpoint was restored
 		try {
 			await provider?.postMessageToWebview({
-				type: "checkpoint_restored",
+				type: "checkpointRestored",
 				checkpoint: commitHash,
 			} as any)
 		} catch (error) {

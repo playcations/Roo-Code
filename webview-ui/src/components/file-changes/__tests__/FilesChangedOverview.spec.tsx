@@ -233,7 +233,7 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 		})
 	})
 
-	it("should handle checkpoint_restored message", async () => {
+	it("should handle checkpointRestored message", async () => {
 		renderComponent()
 
 		// First set up some files
@@ -248,7 +248,7 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 
 		// Simulate checkpoint restore
 		simulateMessage({
-			type: "checkpoint_restored",
+			type: "checkpointRestored",
 			checkpoint: "restored-checkpoint-hash",
 		})
 

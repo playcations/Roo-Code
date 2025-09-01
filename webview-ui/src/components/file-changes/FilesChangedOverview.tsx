@@ -5,12 +5,6 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
 import { useDebouncedAction } from "@/components/ui/hooks/useDebouncedAction"
 
-interface _CheckpointEventData {
-	type: "checkpoint_created" | "checkpoint_restored"
-	checkpoint: string
-	previousCheckpoint?: string
-}
-
 /**
  * FilesChangedOverview is a self-managing component that listens for checkpoint events
  * and displays file changes. It manages its own state and communicates with the backend
@@ -149,7 +143,7 @@ const FilesChangedOverview: React.FC = () => {
 				case "checkpoint_created":
 					handleCheckpointCreated(message.checkpoint, message.previousCheckpoint)
 					break
-				case "checkpoint_restored":
+				case "checkpointRestored":
 					handleCheckpointRestored(message.checkpoint)
 					break
 			}
