@@ -419,6 +419,14 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 					}}>
 					{file.uri}
 				</div>
+				<div
+					style={{
+						fontSize: "11px",
+						color: "var(--vscode-descriptionForeground)",
+						marginTop: "2px",
+					}}>
+					{t(`file-changes:file_types.${file.type}`)}
+				</div>
 			</div>
 
 			<div style={{ display: "flex", alignItems: "center", gap: "8px", marginLeft: "8px" }}>
