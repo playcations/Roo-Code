@@ -205,7 +205,7 @@ describe("FCOMessageHandler", () => {
 			expect(mockProvider.ensureFileChangeManager).toHaveBeenCalled()
 		})
 
-		it("should send undefined when no LLM changes exist", async () => {
+		it("should not send message when no LLM changes exist", async () => {
 			const emptyChangeset = {
 				baseCheckpoint: "base123",
 				files: [],
@@ -215,10 +215,8 @@ describe("FCOMessageHandler", () => {
 
 			await handler.handleMessage({ type: "webviewReady" } as WebviewMessage)
 
-			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			// Should not send any message when no changes
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
 		})
 
 		it("should handle missing task gracefully", async () => {
@@ -227,6 +225,8 @@ describe("FCOMessageHandler", () => {
 			await handler.handleMessage({ type: "webviewReady" } as WebviewMessage)
 
 			expect(mockFileChangeManager.getLLMOnlyChanges).not.toHaveBeenCalled()
+			// Should not send any message when no task context
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
 		})
 	})
 
@@ -355,7 +355,7 @@ describe("FCOMessageHandler", () => {
 			})
 		})
 
-		it("should send undefined when no files remain after accept", async () => {
+		it("should not send message when no files remain after accept", async () => {
 			mockFileChangeManager.getLLMOnlyChanges.mockResolvedValue({
 				baseCheckpoint: "base123",
 				files: [],
@@ -363,10 +363,8 @@ describe("FCOMessageHandler", () => {
 
 			await handler.handleMessage(mockMessage)
 
-			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			// Should not send any message when no remaining changes
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
 		})
 
 		it("should handle missing FileChangeManager", async () => {
@@ -397,7 +395,7 @@ describe("FCOMessageHandler", () => {
 			mockCheckpointService.getContent.mockResolvedValue("original content")
 		})
 
-		it("should revert file and update changeset", async () => {
+		it("should revert file and not send message when no remaining changes", async () => {
 			const updatedChangeset = {
 				baseCheckpoint: "base123",
 				files: [],
@@ -410,10 +408,8 @@ describe("FCOMessageHandler", () => {
 			expect(mockCheckpointService.getContent).toHaveBeenCalledWith("base123", "/test/workspace/test.txt")
 			expect(fs.writeFile).toHaveBeenCalledWith("/test/workspace/test.txt", "original content", "utf8")
 			expect(mockFileChangeManager.rejectChange).toHaveBeenCalledWith("test.txt")
-			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			// Should not send any message when no remaining changes
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
 		})
 
 		it("should delete newly created files", async () => {
@@ -505,10 +501,8 @@ describe("FCOMessageHandler", () => {
 			await handler.handleMessage(mockMessage)
 
 			expect(mockFileChangeManager.setFiles).not.toHaveBeenCalled()
-			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			// Should not send any message when no changes
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
 		})
 
 		it("should handle errors gracefully", async () => {
@@ -520,10 +514,214 @@ describe("FCOMessageHandler", () => {
 
 			await handler.handleMessage(mockMessage)
 
+			// Should not send any message on error
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should not send message when task context is missing", async () => {
+			// Mock task without taskId
+			mockProvider.getCurrentTask.mockReturnValue({
+				fileContextTracker: mockFileContextTracker,
+				checkpointService: mockCheckpointService,
+				// Missing taskId
+			})
+
+			const mockMessage = {
+				type: "filesChangedRequest" as const,
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			// Should not call getLLMOnlyChanges when taskId is missing
+			expect(mockFileChangeManager.getLLMOnlyChanges).not.toHaveBeenCalled()
+			// Should not send any message when task context is missing
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should not send message when fileContextTracker is missing", async () => {
+			// Mock task without fileContextTracker
+			mockProvider.getCurrentTask.mockReturnValue({
+				taskId: "test-task-id",
+				checkpointService: mockCheckpointService,
+				// Missing fileContextTracker
+			})
+
+			const mockMessage = {
+				type: "filesChangedRequest" as const,
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			// Should not call getLLMOnlyChanges when fileContextTracker is missing
+			expect(mockFileChangeManager.getLLMOnlyChanges).not.toHaveBeenCalled()
+			// Should not send any message when fileContextTracker is missing
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+	})
+
+	describe("filesChangedBaselineUpdate", () => {
+		it("should update baseline and send LLM-only changes", async () => {
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			const updatedChangeset = {
+				baseCheckpoint: "new-baseline-123",
+				files: [
+					{
+						uri: "updated.txt",
+						type: "edit" as const,
+						fromCheckpoint: "new-baseline-123",
+						toCheckpoint: "current",
+						linesAdded: 3,
+						linesRemoved: 1,
+					},
+				],
+			}
+
+			mockFileChangeManager.getLLMOnlyChanges.mockResolvedValue(updatedChangeset)
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("new-baseline-123")
+			expect(mockFileChangeManager.getLLMOnlyChanges).toHaveBeenCalledWith("test-task-id", mockFileContextTracker)
 			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
 				type: "filesChanged",
-				filesChanged: undefined,
+				filesChanged: updatedChangeset,
 			})
+		})
+
+		it("should not send message when no LLM changes remain after baseline update", async () => {
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			mockFileChangeManager.getLLMOnlyChanges.mockResolvedValue({
+				baseCheckpoint: "new-baseline-123",
+				files: [],
+			})
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("new-baseline-123")
+			// Should not send any message when no changes
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should not send message when task context is missing", async () => {
+			// Mock task without taskId
+			mockProvider.getCurrentTask.mockReturnValue({
+				fileContextTracker: mockFileContextTracker,
+				checkpointService: mockCheckpointService,
+				// Missing taskId
+			})
+
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("new-baseline-123")
+			// Should not call getLLMOnlyChanges when taskId is missing
+			expect(mockFileChangeManager.getLLMOnlyChanges).not.toHaveBeenCalled()
+			// Should not send any message when task context is missing
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should not send message when fileContextTracker is missing", async () => {
+			// Mock task without fileContextTracker
+			mockProvider.getCurrentTask.mockReturnValue({
+				taskId: "test-task-id",
+				checkpointService: mockCheckpointService,
+				// Missing fileContextTracker
+			})
+
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("new-baseline-123")
+			// Should not call getLLMOnlyChanges when fileContextTracker is missing
+			expect(mockFileChangeManager.getLLMOnlyChanges).not.toHaveBeenCalled()
+			// Should not send any message when fileContextTracker is missing
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should handle missing FileChangeManager", async () => {
+			mockProvider.getFileChangeManager.mockReturnValue(null)
+
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockProvider.ensureFileChangeManager).toHaveBeenCalled()
+		})
+
+		it("should not send message when no baseline provided", async () => {
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				// No baseline property
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).not.toHaveBeenCalled()
+			// Should not send any message when no baseline provided
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should not send message when task is missing", async () => {
+			mockProvider.getCurrentTask.mockReturnValue(null)
+
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).not.toHaveBeenCalled()
+			// Should not send any message when task is missing
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should handle updateBaseline errors gracefully", async () => {
+			mockFileChangeManager.updateBaseline.mockRejectedValue(new Error("Baseline update failed"))
+
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			// Should not throw and not send any message on error
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
+		})
+
+		it("should handle getLLMOnlyChanges errors gracefully", async () => {
+			mockFileChangeManager.getLLMOnlyChanges.mockRejectedValue(new Error("Filter error"))
+
+			const mockMessage = {
+				type: "filesChangedBaselineUpdate" as const,
+				baseline: "new-baseline-123",
+			}
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("new-baseline-123")
+			// Should not send any message when filtering fails
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
 		})
 	})
 
@@ -540,10 +738,8 @@ describe("FCOMessageHandler", () => {
 
 			await handler.handleMessage({ type: "webviewReady" } as WebviewMessage)
 
-			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			// Should not send any message when no changes
+			expect(mockProvider.postMessageToWebview).not.toHaveBeenCalled()
 		})
 
 		it("should handle mixed LLM and user-edited files", async () => {

@@ -13,6 +13,17 @@ vitest.mock("../../../services/checkpoints", () => ({
 	},
 }))
 
+// Mock the TelemetryService to prevent unhandled rejections
+vitest.mock("@roo-code/telemetry", () => ({
+	TelemetryService: {
+		instance: {
+			captureCheckpointCreated: vitest.fn(),
+			captureCheckpointRestored: vitest.fn(),
+			captureCheckpointDiffed: vitest.fn(),
+		},
+	},
+}))
+
 import { describe, it, expect, beforeEach, afterEach, vitest } from "vitest"
 import * as path from "path"
 import * as fs from "fs/promises"
@@ -130,6 +141,12 @@ describe("getCheckpointService orchestration", () => {
 			})
 			return Promise.resolve()
 		})
+		mockService.saveCheckpoint = vitest.fn(() => {
+			return Promise.resolve({
+				commit: "mock-checkpoint-hash",
+				message: "Mock checkpoint",
+			})
+		})
 
 		// Mock the service creation
 		;(RepoPerTaskCheckpointService.create as any).mockReturnValue(mockService)
@@ -147,7 +164,7 @@ describe("getCheckpointService orchestration", () => {
 				hasExistingCheckpoints: false,
 			})
 
-			const service = getCheckpointService(task)
+			const service = await getCheckpointService(task)
 			console.log("Service returned:", service)
 			expect(service).toBe(mockService)
 			expect(RepoPerTaskCheckpointService.create).toHaveBeenCalledWith({
@@ -167,7 +184,7 @@ describe("getCheckpointService orchestration", () => {
 			// Set existing checkpoint service
 			task.checkpointService = mockService
 
-			const service = getCheckpointService(task)
+			const service = await getCheckpointService(task)
 			expect(service).toBe(mockService)
 
 			// Should not create a new service
@@ -181,7 +198,7 @@ describe("getCheckpointService orchestration", () => {
 				enableCheckpoints: false,
 			})
 
-			const service = getCheckpointService(task)
+			const service = await getCheckpointService(task)
 			expect(service).toBeUndefined()
 		})
 	})
@@ -193,7 +210,7 @@ describe("getCheckpointService orchestration", () => {
 				hasExistingCheckpoints: false,
 			})
 
-			const service = getCheckpointService(task)
+			const service = await getCheckpointService(task)
 			expect(service).toBe(mockService)
 
 			// initShadowGit should be called

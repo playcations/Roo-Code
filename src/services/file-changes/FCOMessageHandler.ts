@@ -50,11 +50,16 @@ export class FCOMessageHandler {
 						task.taskId,
 						task.fileContextTracker,
 					)
-					this.provider.postMessageToWebview({
-						type: "filesChanged",
-						filesChanged: filteredChangeset.files.length > 0 ? filteredChangeset : undefined,
-					})
+					// Only send update if there are actual changes
+					if (filteredChangeset.files.length > 0) {
+						this.provider.postMessageToWebview({
+							type: "filesChanged",
+							filesChanged: filteredChangeset,
+						})
+					}
+					// If no changes, don't send anything - keep FCO in current state
 				}
+				// If can't filter, don't send anything - keep FCO in current state
 				break
 			}
 
@@ -189,15 +194,18 @@ export class FCOMessageHandler {
 		if (message.uri && acceptFileChangeManager && task?.taskId && task?.fileContextTracker) {
 			await acceptFileChangeManager.acceptChange(message.uri)
 
-			// Send updated state with LLM-only filtering
+			// Send updated state with LLM-only filtering only if there are remaining changes
 			const updatedChangeset = await acceptFileChangeManager.getLLMOnlyChanges(
 				task.taskId,
 				task.fileContextTracker,
 			)
-			this.provider.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
-			})
+			if (updatedChangeset.files.length > 0) {
+				this.provider.postMessageToWebview({
+					type: "filesChanged",
+					filesChanged: updatedChangeset,
+				})
+			}
+			// If no remaining changes, don't send anything - keep FCO in current state
 		}
 	}
 
@@ -239,28 +247,27 @@ export class FCOMessageHandler {
 			// Remove from tracking since the file has been reverted
 			await rejectFileChangeManager.rejectChange(message.uri)
 
-			// Send updated state with LLM-only filtering
+			// Send updated state with LLM-only filtering only if there are remaining changes
 			if (currentTask?.taskId && currentTask?.fileContextTracker) {
 				const updatedChangeset = await rejectFileChangeManager.getLLMOnlyChanges(
 					currentTask.taskId,
 					currentTask.fileContextTracker,
 				)
-				console.log(`[FCO] After rejection, sending ${updatedChangeset.files.length} LLM-only files to webview`)
-				this.provider.postMessageToWebview({
-					type: "filesChanged",
-					filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
-				})
+				console.log(`[FCO] After rejection, found ${updatedChangeset.files.length} remaining LLM-only files`)
+				if (updatedChangeset.files.length > 0) {
+					this.provider.postMessageToWebview({
+						type: "filesChanged",
+						filesChanged: updatedChangeset,
+					})
+				}
+				// If no remaining changes, don't send anything - keep FCO in current state
 			}
 		} catch (error) {
 			console.error(`[FCO] Error reverting file ${message.uri}:`, error)
 			// Fall back to old behavior (just remove from display) if reversion fails
 			await rejectFileChangeManager.rejectChange(message.uri)
 
-			const updatedChangeset = rejectFileChangeManager.getChanges()
-			this.provider.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
-			})
+			// Don't send fallback message - just log the error and keep FCO in current state
 		}
 	}
 
@@ -271,7 +278,7 @@ export class FCOMessageHandler {
 		}
 		await acceptAllFileChangeManager?.acceptAll()
 
-		// Clear state
+		// Clear FCO state - this is the one case where we DO want to clear the UI
 		this.provider.postMessageToWebview({
 			type: "filesChanged",
 			filesChanged: undefined,
@@ -345,40 +352,40 @@ export class FCOMessageHandler {
 				fileChangeManager = await this.provider.ensureFileChangeManager()
 			}
 
-			if (fileChangeManager && task?.checkpointService) {
-				const changeset = fileChangeManager.getChanges()
-
+			if (fileChangeManager) {
 				// Handle message file changes if provided
 				if (message.fileChanges) {
 					const fileChanges = message.fileChanges.map((fc: any) => ({
 						uri: fc.uri,
 						type: fc.type,
-						fromCheckpoint: task.checkpointService?.baseHash || "base",
+						fromCheckpoint: task?.checkpointService?.baseHash || "base",
 						toCheckpoint: "current",
 					}))
 
 					fileChangeManager.setFiles(fileChanges)
 				}
 
-				// Get filtered changeset and send to webview
-				const filteredChangeset = fileChangeManager.getChanges()
-				this.provider.postMessageToWebview({
-					type: "filesChanged",
-					filesChanged: filteredChangeset.files.length > 0 ? filteredChangeset : undefined,
-				})
-			} else {
-				this.provider.postMessageToWebview({
-					type: "filesChanged",
-					filesChanged: undefined,
-				})
+				// Get LLM-only filtered changeset and send to webview only if there are changes
+				if (task?.taskId && task?.fileContextTracker) {
+					const filteredChangeset = await fileChangeManager.getLLMOnlyChanges(
+						task.taskId,
+						task.fileContextTracker,
+					)
+					// Only send update if there are actual changes
+					if (filteredChangeset.files.length > 0) {
+						this.provider.postMessageToWebview({
+							type: "filesChanged",
+							filesChanged: filteredChangeset,
+						})
+					}
+					// If no changes, don't send anything - keep FCO in current state
+				}
+				// If can't filter, don't send anything - keep FCO in current state
 			}
+			// If no fileChangeManager, don't send anything - keep FCO in current state
 		} catch (error) {
 			console.error("FCOMessageHandler: Error handling filesChangedRequest:", error)
-			// Send empty response to prevent FCO from hanging
-			this.provider.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			// Don't send anything on error - keep FCO in current state
 		}
 	}
 
@@ -393,24 +400,27 @@ export class FCOMessageHandler {
 				// Update baseline to the specified checkpoint
 				await fileChangeManager.updateBaseline(message.baseline)
 
-				// Send updated state
-				const updatedChangeset = fileChangeManager.getChanges()
-				this.provider.postMessageToWebview({
-					type: "filesChanged",
-					filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
-				})
-			} else {
-				this.provider.postMessageToWebview({
-					type: "filesChanged",
-					filesChanged: undefined,
-				})
+				// Send updated state with LLM-only filtering only if there are changes
+				if (task.taskId && task.fileContextTracker) {
+					const updatedChangeset = await fileChangeManager.getLLMOnlyChanges(
+						task.taskId,
+						task.fileContextTracker,
+					)
+					// Only send update if there are actual changes
+					if (updatedChangeset.files.length > 0) {
+						this.provider.postMessageToWebview({
+							type: "filesChanged",
+							filesChanged: updatedChangeset,
+						})
+					}
+					// If no changes, don't send anything - keep FCO in current state
+				}
+				// If can't filter, don't send anything - keep FCO in current state
 			}
+			// If conditions not met, don't send anything - keep FCO in current state
 		} catch (error) {
 			console.error("FCOMessageHandler: Failed to update baseline:", error)
-			this.provider.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			// Don't send anything on error - keep FCO in current state
 		}
 	}
 
