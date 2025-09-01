@@ -1181,14 +1181,10 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 
 			const fcoContainer = screen.getByTestId("files-changed-overview")
 
-			// FCO should have proper styling that doesn't interfere with other floating elements
-			expect(fcoContainer).toHaveStyle({
-				border: "1px solid var(--vscode-panel-border)",
-				borderRadius: "0",
-				padding: "6px 10px",
-				margin: "0",
-				backgroundColor: "var(--vscode-editor-background)",
-			})
+			// FCO should have proper styling classes that don't interfere with other floating elements
+			expect(fcoContainer).toHaveClass("border", "border-[var(--vscode-panel-border)]")
+			expect(fcoContainer).toHaveClass("rounded-none", "px-2.5", "py-1.5", "m-0")
+			expect(fcoContainer).toHaveClass("bg-[var(--vscode-editor-background)]")
 
 			// FCO should not have high z-index values that could cause layering issues
 			// In test environment, z-index might be empty string instead of "auto"
@@ -1277,9 +1273,7 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 			const fcoContainer = screen.getByTestId("files-changed-overview")
 
 			// FCO should have consistent margins that don't cause layout jumps
-			expect(fcoContainer).toHaveStyle({
-				margin: "0",
-			})
+			expect(fcoContainer).toHaveClass("m-0")
 
 			// Remove files to test clean disappearance
 			simulateMessage({
@@ -1297,10 +1291,8 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 
 			const fcoContainer = screen.getByTestId("files-changed-overview")
 
-			// Container should have proper padding
-			expect(fcoContainer).toHaveStyle({
-				padding: "6px 10px",
-			})
+			// Container should have proper padding classes
+			expect(fcoContainer).toHaveClass("px-2.5", "py-1.5")
 
 			// Expand to check internal spacing
 			const header = screen.getByTestId("files-changed-header")
@@ -1315,9 +1307,7 @@ describe("FilesChangedOverview (Self-Managing)", () => {
 			const fileItems = screen.getAllByTestId(/^file-item-/)
 			fileItems.forEach((item) => {
 				// Each file item should have margin bottom for spacing
-				expect(item).toHaveStyle({
-					marginBottom: "3px",
-				})
+				expect(item).toHaveClass("mb-1")
 			})
 		})
 	})
