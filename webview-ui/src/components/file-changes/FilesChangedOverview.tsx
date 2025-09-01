@@ -5,6 +5,17 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
 import { useDebouncedAction } from "@/components/ui/hooks/useDebouncedAction"
 
+// Helper functions for file path display
+const getFileName = (uri: string): string => {
+	return uri.split("/").pop() || uri
+}
+
+const getFilePath = (uri: string): string => {
+	const parts = uri.split("/")
+	parts.pop() // Remove filename
+	return parts.length > 0 ? parts.join("/") : "/"
+}
+
 /**
  * FilesChangedOverview is a self-managing component that listens for checkpoint events
  * and displays file changes. It manages its own state and communicates with the backend
@@ -350,10 +361,12 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 			className="flex justify-between items-center px-2 py-1.5 mb-1 bg-[var(--vscode-list-hoverBackground)] rounded text-xs min-h-[32px] leading-tight">
 			<div className="flex-1 min-w-0">
 				<div className="font-mono text-xs text-[var(--vscode-editor-foreground)] overflow-hidden text-ellipsis whitespace-nowrap font-medium">
-					{file.uri}
+					<span>{getFileName(file.uri)}</span>
+					<span className="mx-1 opacity-60">•</span>
+					<span className="opacity-60 text-[11px]">{t(`file-changes:file_types.${file.type}`)}</span>
 				</div>
-				<div className="text-[11px] text-[var(--vscode-descriptionForeground)] mt-0.5">
-					{t(`file-changes:file_types.${file.type}`)}
+				<div className="text-[10px] text-[var(--vscode-descriptionForeground)] opacity-60 mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap">
+					{getFilePath(file.uri)}
 				</div>
 			</div>
 
@@ -367,8 +380,8 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 						disabled={isProcessing}
 						title={t("file-changes:actions.view_diff")}
 						data-testid={`diff-${file.uri}`}
-						className="bg-transparent text-[var(--vscode-button-foreground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[50px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
-						{t("file-changes:actions.view_diff")}
+						className="bg-transparent text-[var(--vscode-button-foreground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[35px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
+						Diff
 					</button>
 					<button
 						onClick={() => handleWithDebounce(() => onRejectFile(file.uri))}
