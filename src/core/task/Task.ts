@@ -60,6 +60,7 @@ import { BrowserSession } from "../../services/browser/BrowserSession"
 import { McpHub } from "../../services/mcp/McpHub"
 import { McpServerManager } from "../../services/mcp/McpServerManager"
 import { RepoPerTaskCheckpointService } from "../../services/checkpoints"
+import { CheckpointResult } from "../../services/checkpoints/types"
 
 // integrations
 import { DiffViewProvider } from "../../integrations/editor/DiffViewProvider"
@@ -252,6 +253,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	enableCheckpoints: boolean
 	checkpointService?: RepoPerTaskCheckpointService
 	checkpointServiceInitializing = false
+	ongoingCheckpointSaves = new Map<string, Promise<void | CheckpointResult | undefined>>()
 
 	// Task Bridge
 	enableTaskBridge: boolean
@@ -1395,6 +1397,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			this.removeAllListeners()
 		} catch (error) {
 			console.error("Error removing event listeners:", error)
+		}
+
+		// Clean up ongoing checkpoint saves to prevent memory leaks
+		try {
+			this.ongoingCheckpointSaves.clear()
+		} catch (error) {
+			console.error("Error clearing ongoing checkpoint saves:", error)
 		}
 
 		// Stop waiting for child task completion.

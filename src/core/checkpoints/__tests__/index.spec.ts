@@ -79,6 +79,7 @@ const createMockTask = (options: { taskId: string; hasExistingCheckpoints: boole
 		enableCheckpoints: options.enableCheckpoints ?? true,
 		checkpointService: null as any,
 		checkpointServiceInitializing: false,
+		ongoingCheckpointSaves: new Map(),
 		clineMessages: options.hasExistingCheckpoints
 			? [{ say: "checkpoint_saved", ts: Date.now(), text: "existing-checkpoint-hash" }]
 			: [],
