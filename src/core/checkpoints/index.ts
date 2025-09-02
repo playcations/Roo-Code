@@ -166,11 +166,13 @@ async function checkGitInstallation(
 					// Don't throw - allow checkpoint service to continue initializing
 				}
 
+				// Note: No initialization checkpoint needed - first checkpoint before file edit serves as baseline
 				if (isCheckpointNeeded) {
-					log("[Task#getCheckpointService] no checkpoints found, saving initial checkpoint")
-					checkpointSave(cline, true)
+					log(
+						"[Task#getCheckpointService] no checkpoints found, will create baseline checkpoint before first file edit",
+					)
 				} else {
-					log("[Task#getCheckpointService] existing checkpoints found, skipping initial checkpoint")
+					log("[Task#getCheckpointService] existing checkpoints found, using existing checkpoint as baseline")
 				}
 			} catch (err) {
 				log("[Task#getCheckpointService] caught error in on('initialize'), disabling checkpoints")

@@ -35,6 +35,7 @@ import { Task } from "../task/Task"
 import { codebaseSearchTool } from "../tools/codebaseSearchTool"
 import { experiments, EXPERIMENT_IDS } from "../../shared/experiments"
 import { applyDiffToolLegacy } from "../tools/applyDiffTool"
+import { updateFCOAfterEdit } from "../../services/file-changes/updateAfterEdit"
 
 /**
  * Processes and presents assistant message content to the user interface.
@@ -420,6 +421,7 @@ export async function presentAssistantMessage(cline: Task) {
 				case "write_to_file":
 					await checkpointSaveAndMark(cline)
 					await writeToFileTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					await updateFCOAfterEdit(cline)
 					break
 				case "update_todo_list":
 					await updateTodoListTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
@@ -440,6 +442,7 @@ export async function presentAssistantMessage(cline: Task) {
 					if (isMultiFileApplyDiffEnabled) {
 						await checkpointSaveAndMark(cline)
 						await applyDiffTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+						await updateFCOAfterEdit(cline)
 					} else {
 						await checkpointSaveAndMark(cline)
 						await applyDiffToolLegacy(
@@ -450,16 +453,19 @@ export async function presentAssistantMessage(cline: Task) {
 							pushToolResult,
 							removeClosingTag,
 						)
+						await updateFCOAfterEdit(cline)
 					}
 					break
 				}
 				case "insert_content":
 					await checkpointSaveAndMark(cline)
 					await insertContentTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					await updateFCOAfterEdit(cline)
 					break
 				case "search_and_replace":
 					await checkpointSaveAndMark(cline)
 					await searchAndReplaceTool(cline, block, askApproval, handleError, pushToolResult, removeClosingTag)
+					await updateFCOAfterEdit(cline)
 					break
 				case "read_file":
 					// Check if this model should use the simplified single-file read tool
