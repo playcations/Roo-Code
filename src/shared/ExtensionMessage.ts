@@ -123,8 +123,10 @@ export interface ExtensionMessage {
 		| "showEditMessageDialog"
 		| "commands"
 		| "insertTextIntoTextarea"
+		| "filesChanged"
 	text?: string
 	payload?: any // Add a generic payload for now, can refine later
+	filesChanged?: any // Files changed data
 	action?:
 		| "chatButtonClicked"
 		| "mcpButtonClicked"
@@ -282,6 +284,7 @@ export type ExtensionState = Pick<
 	| "includeTaskHistoryInEnhance"
 > & {
 	version: string
+	filesChangedEnabled: boolean
 	clineMessages: ClineMessage[]
 	currentTaskItem?: HistoryItem
 	currentTaskTodos?: TodoItem[] // Initial todos for the current task
