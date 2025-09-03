@@ -13,7 +13,7 @@ try {
 }
 
 import type { CloudUserInfo, AuthState } from "@roo-code/types"
-import { CloudService } from "@roo-code/cloud"
+import { CloudService, BridgeOrchestrator } from "@roo-code/cloud"
 import { TelemetryService, PostHogTelemetryClient } from "@roo-code/telemetry"
 
 import "./utils/path" // Necessary to have access to String.prototype.toPosix.
@@ -135,8 +135,11 @@ export async function activate(context: vscode.ExtensionContext) {
 		if (data.state === "logged-out") {
 			try {
 				// Disconnect the bridge when user logs out
-				// BridgeOrchestrator has been removed - bridge functionality disabled
-				cloudLogger("[CloudService] Bridge disconnection skipped (BridgeOrchestrator removed)")
+				// When userInfo is null and remoteControlEnabled is false, BridgeOrchestrator
+				// will disconnect. The options parameter is not needed for disconnection.
+				await BridgeOrchestrator.connectOrDisconnect(null, false)
+
+				cloudLogger("[CloudService] BridgeOrchestrator disconnected on logout")
 			} catch (error) {
 				cloudLogger(
 					`[CloudService] Failed to disconnect BridgeOrchestrator on logout: ${
@@ -156,12 +159,17 @@ export async function activate(context: vscode.ExtensionContext) {
 				const isCloudAgent =
 					typeof process.env.ROO_CODE_CLOUD_TOKEN === "string" && process.env.ROO_CODE_CLOUD_TOKEN.length > 0
 
-				const remoteControlEnabled = isCloudAgent ? true : false // getUserSettings method removed - disable bridge functionality
+				const remoteControlEnabled = isCloudAgent
+					? true
+					: (CloudService.instance.getUserSettings()?.settings?.extensionBridgeEnabled ?? false)
 
 				cloudLogger(`[CloudService] Settings updated - remoteControlEnabled = ${remoteControlEnabled}`)
 
-				// BridgeOrchestrator has been removed - bridge functionality disabled
-				cloudLogger("[CloudService] Bridge connection skipped (BridgeOrchestrator removed)")
+				await BridgeOrchestrator.connectOrDisconnect(userInfo, remoteControlEnabled, {
+					...config,
+					provider,
+					sessionId: vscode.env.sessionId,
+				})
 			} catch (error) {
 				cloudLogger(
 					`[CloudService] Failed to update BridgeOrchestrator on settings change: ${error instanceof Error ? error.message : String(error)}`,
@@ -188,10 +196,15 @@ export async function activate(context: vscode.ExtensionContext) {
 
 			cloudLogger(`[CloudService] isCloudAgent = ${isCloudAgent}, socketBridgeUrl = ${config.socketBridgeUrl}`)
 
-			const remoteControlEnabled = isCloudAgent ? true : false // getUserSettings method removed - disable bridge functionality
+			const remoteControlEnabled = isCloudAgent
+				? true
+				: (CloudService.instance.getUserSettings()?.settings?.extensionBridgeEnabled ?? false)
 
-			// BridgeOrchestrator has been removed - bridge functionality disabled
-			cloudLogger("[CloudService] Bridge connection skipped (BridgeOrchestrator removed)")
+			await BridgeOrchestrator.connectOrDisconnect(userInfo, remoteControlEnabled, {
+				...config,
+				provider,
+				sessionId: vscode.env.sessionId,
+			})
 		} catch (error) {
 			cloudLogger(
 				`[CloudService] Failed to fetch bridgeConfig: ${error instanceof Error ? error.message : String(error)}`,
@@ -377,7 +390,11 @@ export async function deactivate() {
 		}
 	}
 
-	// BridgeOrchestrator has been removed - bridge functionality disabled
+	const bridge = BridgeOrchestrator.getInstance()
+
+	if (bridge) {
+		await bridge.disconnect()
+	}
 
 	await McpServerManager.cleanup(extensionContext)
 	TelemetryService.instance.shutdown()

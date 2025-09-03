@@ -9,11 +9,10 @@ import type {
 	ClineMessage,
 	MarketplaceItem,
 	TodoItem,
-	ClineSay,
-	FileChangeset,
 	CloudUserInfo,
 	OrganizationAllowList,
 	ShareVisibility,
+	QueuedMessage,
 } from "@roo-code/types"
 
 import { GitCommit } from "../utils/git"
@@ -59,12 +58,9 @@ export interface LanguageModelChatSelector {
 	id?: string
 }
 
-/**
- * Message sent from the VS Code extension to the webview UI.
- * The 'type' union below enumerates outbound notifications and data updates
- * (e.g., "state", "theme", "indexingStatusUpdate", "filesChanged") that the
- * webview consumes to render and synchronize state. See the full union below.
- */
+// Represents JSON data that is sent from extension to webview, called
+// ExtensionMessage and has 'type' enum which can be 'plusButtonClicked' or
+// 'settingsButtonClicked' or 'hello'. Webview will hold state.
 export interface ExtensionMessage {
 	type:
 		| "action"
@@ -127,10 +123,6 @@ export interface ExtensionMessage {
 		| "showEditMessageDialog"
 		| "commands"
 		| "insertTextIntoTextarea"
-		| "filesChanged"
-		| "checkpointCreated"
-		| "checkpointRestored"
-		| "say"
 	text?: string
 	payload?: any // Add a generic payload for now, can refine later
 	action?:
@@ -205,10 +197,7 @@ export interface ExtensionMessage {
 	messageTs?: number
 	context?: string
 	commands?: Command[]
-	filesChanged?: FileChangeset // Added filesChanged property
-	checkpoint?: string // For checkpointCreated and checkpointRestored messages
-	previousCheckpoint?: string // For checkpoint_created message
-	say?: ClineSay // Added say property
+	queuedMessages?: QueuedMessage[]
 }
 
 export type ExtensionState = Pick<
@@ -232,8 +221,10 @@ export type ExtensionState = Pick<
 	| "alwaysAllowMcp"
 	| "alwaysAllowModeSwitch"
 	| "alwaysAllowSubtasks"
+	| "alwaysAllowFollowupQuestions"
 	| "alwaysAllowExecute"
 	| "alwaysAllowUpdateTodoList"
+	| "followupAutoApproveTimeoutMs"
 	| "allowedCommands"
 	| "deniedCommands"
 	| "allowedMaxRequests"
@@ -242,6 +233,7 @@ export type ExtensionState = Pick<
 	| "browserViewportSize"
 	| "screenshotQuality"
 	| "remoteBrowserEnabled"
+	| "cachedChromeHostUrl"
 	| "remoteBrowserHost"
 	// | "enableCheckpoints" // Optional in GlobalSettings, required here.
 	| "ttsEnabled"
@@ -287,12 +279,13 @@ export type ExtensionState = Pick<
 	| "maxDiagnosticMessages"
 	| "remoteControlEnabled"
 	| "openRouterImageGenerationSelectedModel"
+	| "includeTaskHistoryInEnhance"
 > & {
 	version: string
 	clineMessages: ClineMessage[]
 	currentTaskItem?: HistoryItem
 	currentTaskTodos?: TodoItem[] // Initial todos for the current task
-	apiConfiguration?: ProviderSettings
+	apiConfiguration: ProviderSettings
 	uriScheme?: string
 	shouldShowAnnouncement: boolean
 
@@ -340,8 +333,14 @@ export type ExtensionState = Pick<
 	marketplaceInstalledMetadata?: { project: Record<string, any>; global: Record<string, any> }
 	profileThresholds: Record<string, number>
 	hasOpenedModeSelector: boolean
-	filesChangedEnabled: boolean
 	openRouterImageApiKey?: string
+	openRouterUseMiddleOutTransform?: boolean
+	messageQueue?: QueuedMessage[]
+	lastShownAnnouncementId?: string
+	apiModelId?: string
+	mcpServers?: McpServer[]
+	hasSystemPromptOverride?: boolean
+	mdmCompliant?: boolean
 }
 
 export interface ClineSayTool {

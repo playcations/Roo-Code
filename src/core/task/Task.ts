@@ -10,7 +10,6 @@ import pWaitFor from "p-wait-for"
 import { serializeError } from "serialize-error"
 
 import {
-	type RooCodeSettings,
 	type TaskLike,
 	type TaskMetadata,
 	type TaskEvents,
@@ -35,13 +34,15 @@ import {
 	isIdleAsk,
 	isInteractiveAsk,
 	isResumableAsk,
+	QueuedMessage,
 } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
-import { CloudService } from "@roo-code/cloud"
+import { CloudService, BridgeOrchestrator } from "@roo-code/cloud"
 
 // api
 import { ApiHandler, ApiHandlerCreateMessageMetadata, buildApiHandler } from "../../api"
 import { ApiStream } from "../../api/transform/stream"
+import { maybeRemoveImageBlocks } from "../../api/transform/image-cleaning"
 
 // shared
 import { findLastIndex } from "../../shared/array"
@@ -62,7 +63,6 @@ import { BrowserSession } from "../../services/browser/BrowserSession"
 import { McpHub } from "../../services/mcp/McpHub"
 import { McpServerManager } from "../../services/mcp/McpServerManager"
 import { RepoPerTaskCheckpointService } from "../../services/checkpoints"
-import { CheckpointResult } from "../../services/checkpoints/types"
 
 // integrations
 import { DiffViewProvider } from "../../integrations/editor/DiffViewProvider"
@@ -80,6 +80,7 @@ import { SYSTEM_PROMPT } from "../prompts/system"
 
 // core modules
 import { ToolRepetitionDetector } from "../tools/ToolRepetitionDetector"
+import { restoreTodoListForTask } from "../tools/updateTodoListTool"
 import { FileContextTracker } from "../context-tracking/FileContextTracker"
 import { RooIgnoreController } from "../ignore/RooIgnoreController"
 import { RooProtectedController } from "../protect/RooProtectedController"
@@ -89,7 +90,14 @@ import { truncateConversationIfNeeded } from "../sliding-window"
 import { ClineProvider } from "../webview/ClineProvider"
 import { MultiSearchReplaceDiffStrategy } from "../diff/strategies/multi-search-replace"
 import { MultiFileSearchReplaceDiffStrategy } from "../diff/strategies/multi-file-search-replace"
-import { readApiMessages, saveApiMessages, readTaskMessages, saveTaskMessages, taskMetadata } from "../task-persistence"
+import {
+	type ApiMessage,
+	readApiMessages,
+	saveApiMessages,
+	readTaskMessages,
+	saveTaskMessages,
+	taskMetadata,
+} from "../task-persistence"
 import { getEnvironmentDetails } from "../environment/getEnvironmentDetails"
 import { checkContextWindowExceededError } from "../context/context-management/context-error-handling"
 import {
@@ -101,12 +109,11 @@ import {
 	checkpointDiff,
 } from "../checkpoints"
 import { processUserContentMentions } from "../mentions/processUserContentMentions"
-import { ApiMessage } from "../task-persistence/apiMessages"
 import { getMessagesSinceLastSummary, summarizeConversation } from "../condense"
-import { maybeRemoveImageBlocks } from "../../api/transform/image-cleaning"
-import { restoreTodoListForTask } from "../tools/updateTodoListTool"
-import { AutoApprovalHandler } from "./AutoApprovalHandler"
 import { Gpt5Metadata, ClineMessageWithMetadata } from "./types"
+import { MessageQueueService } from "../message-queue/MessageQueueService"
+
+import { AutoApprovalHandler } from "./AutoApprovalHandler"
 
 const MAX_EXPONENTIAL_BACKOFF_SECONDS = 600 // 10 minutes
 const DEFAULT_USAGE_COLLECTION_TIMEOUT_MS = 5000 // 5 seconds
@@ -135,6 +142,10 @@ export interface TaskOptions extends CreateTaskOptions {
 
 export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	readonly taskId: string
+	readonly rootTaskId?: string
+	readonly parentTaskId?: string
+	childTaskId?: string
+
 	readonly instanceId: string
 	readonly metadata: TaskMetadata
 
@@ -256,10 +267,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	enableCheckpoints: boolean
 	checkpointService?: RepoPerTaskCheckpointService
 	checkpointServiceInitializing = false
-	ongoingCheckpointSaves = new Map<string, Promise<void | CheckpointResult | undefined>>()
 
 	// Task Bridge
 	enableBridge: boolean
+
+	// Message Queue Service
+	public readonly messageQueueService: MessageQueueService
+	private messageQueueStateChangedHandler: (() => void) | undefined
 
 	// Streaming
 	isWaitingForFirstChunk = false
@@ -303,6 +317,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		this.taskId = historyItem ? historyItem.id : crypto.randomUUID()
+		this.rootTaskId = historyItem ? historyItem.rootTaskId : rootTask?.taskId
+		this.parentTaskId = historyItem ? historyItem.parentTaskId : parentTask?.taskId
+		this.childTaskId = undefined
 
 		this.metadata = {
 			task: historyItem ? historyItem.task : task,
@@ -340,7 +357,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		this.enableCheckpoints = enableCheckpoints
 		this.enableBridge = enableBridge
 
-		this.rootTask = rootTask
 		this.parentTask = parentTask
 		this.taskNumber = taskNumber
 
@@ -358,8 +374,17 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			TelemetryService.instance.captureTaskCreated(this.taskId)
 		}
 
-		// Initialize the assistant message parser
+		// Initialize the assistant message parser.
 		this.assistantMessageParser = new AssistantMessageParser()
+
+		this.messageQueueService = new MessageQueueService()
+
+		this.messageQueueStateChangedHandler = () => {
+			this.emit(RooCodeEventName.TaskUserMessage, this.taskId)
+			this.providerRef.deref()?.postStateToWebview()
+		}
+
+		this.messageQueueService.on("stateChanged", this.messageQueueStateChangedHandler)
 
 		// Only set up diff strategy if diff is enabled.
 		if (this.diffEnabled) {
@@ -634,12 +659,14 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			})
 
 			const { historyItem, tokenUsage } = await taskMetadata({
-				messages: this.clineMessages,
 				taskId: this.taskId,
+				rootTaskId: this.rootTaskId,
+				parentTaskId: this.parentTaskId,
 				taskNumber: this.taskNumber,
+				messages: this.clineMessages,
 				globalStoragePath: this.globalStoragePath,
 				workspace: this.cwd,
-				mode: this._taskMode || defaultModeSlug, // Use the task's own mode, not the current provider mode
+				mode: this._taskMode || defaultModeSlug, // Use the task's own mode, not the current provider mode.
 			})
 
 			this.emit(RooCodeEventName.TaskTokenUsageUpdated, this.taskId, tokenUsage)
@@ -761,10 +788,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		// The state is mutable if the message is complete and the task will
 		// block (via the `pWaitFor`).
 		const isBlocking = !(this.askResponse !== undefined || this.lastMessageTs !== askTs)
-		const isStatusMutable = !partial && isBlocking
+		const isMessageQueued = !this.messageQueueService.isEmpty()
+		const isStatusMutable = !partial && isBlocking && !isMessageQueued
 		let statusMutationTimeouts: NodeJS.Timeout[] = []
 
 		if (isStatusMutable) {
+			console.log(`Task#ask will block -> type: ${type}`)
+
 			if (isInteractiveAsk(type)) {
 				statusMutationTimeouts.push(
 					setTimeout(() => {
@@ -799,9 +829,19 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 					}, 1_000),
 				)
 			}
+		} else if (isMessageQueued) {
+			console.log("Task#ask will process message queue")
+
+			const message = this.messageQueueService.dequeueMessage()
+
+			if (message) {
+				setTimeout(async () => {
+					await this.submitUserMessage(message.text, message.images)
+				}, 0)
+			}
 		}
 
-		// Wait for askResponse to be set
+		// Wait for askResponse to be set.
 		await pWaitFor(() => this.askResponse !== undefined || this.lastMessageTs !== askTs, { interval: 100 })
 
 		if (this.lastMessageTs !== askTs) {
@@ -873,6 +913,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				if (providerProfile) {
 					await provider.setProviderProfile(providerProfile)
 				}
+
+				this.emit(RooCodeEventName.TaskUserMessage, this.taskId)
 
 				provider.postMessageToWebview({ type: "invoke", invoke: "sendMessage", text, images })
 			} else {
@@ -1095,12 +1137,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		return formatResponse.toolError(formatResponse.missingToolParameterError(paramName))
 	}
 
-	// Start / Abort / Resume
+	// Lifecycle
+	// Start / Resume / Abort / Dispose
 
 	private async startTask(task?: string, images?: string[]): Promise<void> {
 		if (this.enableBridge) {
 			try {
-				// BridgeOrchestrator has been removed - bridge functionality disabled
+				await BridgeOrchestrator.subscribeToTask(this)
 			} catch (error) {
 				console.error(
 					`[Task#startTask] BridgeOrchestrator.subscribeToTask() failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1138,37 +1181,10 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		])
 	}
 
-	public async resumePausedTask(lastMessage: string) {
-		this.isPaused = false
-		this.emit(RooCodeEventName.TaskUnpaused)
-
-		// Fake an answer from the subtask that it has completed running and
-		// this is the result of what it has done add the message to the chat
-		// history and to the webview ui.
-		try {
-			await this.say("subtask_result", lastMessage)
-
-			await this.addToApiConversationHistory({
-				role: "user",
-				content: [{ type: "text", text: `[new_task completed] Result: ${lastMessage}` }],
-			})
-
-			// Set skipPrevResponseIdOnce to ensure the next API call sends the full conversation
-			// including the subtask result, not just from before the subtask was created
-			this.skipPrevResponseIdOnce = true
-		} catch (error) {
-			this.providerRef
-				.deref()
-				?.log(`Error failed to add reply from subtask into conversation of parent task, error: ${error}`)
-
-			throw error
-		}
-	}
-
 	private async resumeTaskFromHistory() {
 		if (this.enableBridge) {
 			try {
-				// BridgeOrchestrator has been removed - bridge functionality disabled
+				await BridgeOrchestrator.subscribeToTask(this)
 			} catch (error) {
 				console.error(
 					`[Task#resumeTaskFromHistory] BridgeOrchestrator.subscribeToTask() failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1178,19 +1194,21 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		const modifiedClineMessages = await this.getSavedClineMessages()
 
-		// Check for any stored GPT-5 response IDs in the message history
+		// Check for any stored GPT-5 response IDs in the message history.
 		const gpt5Messages = modifiedClineMessages.filter(
 			(m): m is ClineMessage & ClineMessageWithMetadata =>
 				m.type === "say" &&
 				m.say === "text" &&
 				!!(m as ClineMessageWithMetadata).metadata?.gpt5?.previous_response_id,
 		)
+
 		if (gpt5Messages.length > 0) {
 			const lastGpt5Message = gpt5Messages[gpt5Messages.length - 1]
-			// The lastGpt5Message contains the previous_response_id that can be used for continuity
+			// The lastGpt5Message contains the previous_response_id that can be
+			// used for continuity.
 		}
 
-		// Remove any resume messages that may have been added before
+		// Remove any resume messages that may have been added before.
 		const lastRelevantMessageIndex = findLastIndex(
 			modifiedClineMessages,
 			(m) => !(m.ask === "resume_task" || m.ask === "resume_completed_task"),
@@ -1408,8 +1426,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 			newUserContent.push(...formatResponse.imageBlocks(responseImages))
 		}
 
-		// Ensure we have at least some content to send to the API
-		// If newUserContent is empty, add a minimal resumption message
+		// Ensure we have at least some content to send to the API.
+		// If newUserContent is empty, add a minimal resumption message.
 		if (newUserContent.length === 0) {
 			newUserContent.push({
 				type: "text",
@@ -1419,26 +1437,56 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		await this.overwriteApiConversationHistory(modifiedApiConversationHistory)
 
-		// Task resuming from history item
-
+		// Task resuming from history item.
 		await this.initiateTaskLoop(newUserContent)
+	}
+
+	public async abortTask(isAbandoned = false) {
+		// Aborting task
+
+		// Will stop any autonomously running promises.
+		if (isAbandoned) {
+			this.abandoned = true
+		}
+
+		this.abort = true
+		this.emit(RooCodeEventName.TaskAborted)
+
+		try {
+			this.dispose() // Call the centralized dispose method
+		} catch (error) {
+			console.error(`Error during task ${this.taskId}.${this.instanceId} disposal:`, error)
+			// Don't rethrow - we want abort to always succeed
+		}
+		// Save the countdown message in the automatic retry or other content.
+		try {
+			// Save the countdown message in the automatic retry or other content.
+			await this.saveClineMessages()
+		} catch (error) {
+			console.error(`Error saving messages during abort for task ${this.taskId}.${this.instanceId}:`, error)
+		}
 	}
 
 	public dispose(): void {
 		console.log(`[Task#dispose] disposing task ${this.taskId}.${this.instanceId}`)
+
+		// Dispose message queue and remove event listeners.
+		try {
+			if (this.messageQueueStateChangedHandler) {
+				this.messageQueueService.removeListener("stateChanged", this.messageQueueStateChangedHandler)
+				this.messageQueueStateChangedHandler = undefined
+			}
+
+			this.messageQueueService.dispose()
+		} catch (error) {
+			console.error("Error disposing message queue:", error)
+		}
 
 		// Remove all event listeners to prevent memory leaks.
 		try {
 			this.removeAllListeners()
 		} catch (error) {
 			console.error("Error removing event listeners:", error)
-		}
-
-		// Clean up ongoing checkpoint saves to prevent memory leaks
-		try {
-			this.ongoingCheckpointSaves.clear()
-		} catch (error) {
-			console.error("Error clearing ongoing checkpoint saves:", error)
 		}
 
 		// Stop waiting for child task completion.
@@ -1448,7 +1496,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		if (this.enableBridge) {
-			// BridgeOrchestrator has been removed - bridge functionality disabled
+			BridgeOrchestrator.getInstance()
+				?.unsubscribeFromTask(this.taskId)
+				.catch((error) =>
+					console.error(
+						`[Task#dispose] BridgeOrchestrator#unsubscribeFromTask() failed: ${error instanceof Error ? error.message : String(error)}`,
+					),
+				)
 		}
 
 		// Release any terminals associated with this task.
@@ -1497,37 +1551,36 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 	}
 
-	public async abortTask(isAbandoned = false) {
-		// Aborting task
+	// Subtasks
+	// Spawn / Wait / Complete
 
-		// Will stop any autonomously running promises.
-		if (isAbandoned) {
-			this.abandoned = true
+	public async startSubtask(message: string, initialTodos: TodoItem[], mode: string) {
+		const provider = this.providerRef.deref()
+
+		if (!provider) {
+			throw new Error("Provider not available")
 		}
 
-		this.abort = true
-		this.emit(RooCodeEventName.TaskAborted)
+		const newTask = await provider.createTask(message, undefined, this, { initialTodos })
 
-		try {
-			this.dispose() // Call the centralized dispose method
-		} catch (error) {
-			console.error(`Error during task ${this.taskId}.${this.instanceId} disposal:`, error)
-			// Don't rethrow - we want abort to always succeed
+		if (newTask) {
+			this.isPaused = true // Pause parent.
+			this.childTaskId = newTask.taskId
+
+			await provider.handleModeSwitch(mode) // Set child's mode.
+			await delay(500) // Allow mode change to take effect.
+
+			this.emit(RooCodeEventName.TaskPaused, this.taskId)
+			this.emit(RooCodeEventName.TaskSpawned, newTask.taskId)
 		}
-		// Save the countdown message in the automatic retry or other content.
-		try {
-			// Save the countdown message in the automatic retry or other content.
-			await this.saveClineMessages()
-		} catch (error) {
-			console.error(`Error saving messages during abort for task ${this.taskId}.${this.instanceId}:`, error)
-		}
+
+		return newTask
 	}
 
 	// Used when a sub-task is launched and the parent task is waiting for it to
 	// finish.
-	// TBD: The 1s should be added to the settings, also should add a timeout to
-	// prevent infinite waiting.
-	public async waitForResume() {
+	// TBD: Add a timeout to prevent infinite waiting.
+	public async waitForSubtask() {
 		await new Promise<void>((resolve) => {
 			this.pauseInterval = setInterval(() => {
 				if (!this.isPaused) {
@@ -1537,6 +1590,35 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 				}
 			}, 1000)
 		})
+	}
+
+	public async completeSubtask(lastMessage: string) {
+		this.isPaused = false
+		this.childTaskId = undefined
+
+		this.emit(RooCodeEventName.TaskUnpaused, this.taskId)
+
+		// Fake an answer from the subtask that it has completed running and
+		// this is the result of what it has done add the message to the chat
+		// history and to the webview ui.
+		try {
+			await this.say("subtask_result", lastMessage)
+
+			await this.addToApiConversationHistory({
+				role: "user",
+				content: [{ type: "text", text: `[new_task completed] Result: ${lastMessage}` }],
+			})
+
+			// Set skipPrevResponseIdOnce to ensure the next API call sends the full conversation
+			// including the subtask result, not just from before the subtask was created
+			this.skipPrevResponseIdOnce = true
+		} catch (error) {
+			this.providerRef
+				.deref()
+				?.log(`Error failed to add reply from subtask into conversation of parent task, error: ${error}`)
+
+			throw error
+		}
 	}
 
 	// Task Loop
@@ -1625,7 +1707,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 			if (this.isPaused && provider) {
 				provider.log(`[subtasks] paused ${this.taskId}.${this.instanceId}`)
-				await this.waitForResume()
+				await this.waitForSubtask()
 				provider.log(`[subtasks] resumed ${this.taskId}.${this.instanceId}`)
 				const currentMode = (await provider.getState())?.mode ?? defaultModeSlug
 
@@ -2722,10 +2804,6 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	// Getters
 
-	public get cwd() {
-		return this.workspacePath
-	}
-
 	public get taskStatus(): TaskStatus {
 		if (this.interactiveAsk) {
 			return TaskStatus.Interactive
@@ -2744,5 +2822,13 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	public get taskAsk(): ClineMessage | undefined {
 		return this.idleAsk || this.resumableAsk || this.interactiveAsk
+	}
+
+	public get queuedMessages(): QueuedMessage[] {
+		return this.messageQueueService.messages
+	}
+
+	public get cwd() {
+		return this.workspacePath
 	}
 }

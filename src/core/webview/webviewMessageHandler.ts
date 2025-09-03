@@ -23,7 +23,12 @@ import { Package } from "../../shared/package"
 import { RouterName, toRouterName, ModelRecord } from "../../shared/api"
 import { MessageEnhancer } from "./messageEnhancer"
 
-import { checkoutDiffPayloadSchema, checkoutRestorePayloadSchema, WebviewMessage } from "../../shared/WebviewMessage"
+import {
+	type WebviewMessage,
+	type EditQueuedMessagePayload,
+	checkoutDiffPayloadSchema,
+	checkoutRestorePayloadSchema,
+} from "../../shared/WebviewMessage"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
 import { experimentDefault } from "../../shared/experiments"
 import { Terminal } from "../../integrations/terminal/Terminal"
@@ -420,11 +425,7 @@ export const webviewMessageHandler = async (
 
 			try {
 				const visibility = message.visibility || "organization"
-				const result = await CloudService.instance.shareTask(
-					shareTaskId,
-					visibility,
-					(clineMessages as any) || [],
-				)
+				const result = await CloudService.instance.shareTask(shareTaskId, visibility, clineMessages)
 
 				if (result.success && result.shareUrl) {
 					// Show success notification
@@ -955,8 +956,9 @@ export const webviewMessageHandler = async (
 			break
 		case "remoteControlEnabled":
 			try {
-				// updateUserSettings method removed - log attempt
-				provider.log(`Cloud settings update skipped - updateUserSettings method not available`)
+				await CloudService.instance.updateUserSettings({
+					extensionBridgeEnabled: message.bool ?? false,
+				})
 			} catch (error) {
 				provider.log(`Failed to update cloud settings for remote control: ${error}`)
 			}
@@ -1244,7 +1246,6 @@ export const webviewMessageHandler = async (
 					...currentState,
 					customModePrompts: updatedPrompts,
 					hasOpenedModeSelector: currentState.hasOpenedModeSelector ?? false,
-					filesChangedEnabled: currentState.filesChangedEnabled ?? true,
 				}
 				provider.postMessageToWebview({ type: "state", state: stateWithPrompts })
 
@@ -1416,7 +1417,7 @@ export const webviewMessageHandler = async (
 					const {
 						apiConfiguration,
 						customSupportPrompts,
-						listApiConfigMeta,
+						listApiConfigMeta = [],
 						enhancementApiConfigId,
 						includeTaskHistoryInEnhance,
 					} = state
@@ -1562,12 +1563,7 @@ export const webviewMessageHandler = async (
 			break
 		case "upsertApiConfiguration":
 			if (message.text && message.apiConfiguration) {
-				try {
-					await provider.upsertProviderProfile(message.text, message.apiConfiguration)
-				} catch (error) {
-					// Error is already logged in upsertProviderProfile, just show user message
-					vscode.window.showErrorMessage(t("errors.create_api_config"))
-				}
+				await provider.upsertProviderProfile(message.text, message.apiConfiguration)
 			}
 			break
 		case "renameApiConfiguration":
@@ -2678,6 +2674,27 @@ export const webviewMessageHandler = async (
 		case "showMdmAuthRequiredNotification": {
 			// Show notification that organization requires authentication
 			vscode.window.showWarningMessage(t("common:mdm.info.organization_requires_auth"))
+			break
+		}
+
+		/**
+		 * Chat Message Queue
+		 */
+
+		case "queueMessage": {
+			provider.getCurrentTask()?.messageQueueService.addMessage(message.text ?? "", message.images)
+			break
+		}
+		case "removeQueuedMessage": {
+			provider.getCurrentTask()?.messageQueueService.removeMessage(message.text ?? "")
+			break
+		}
+		case "editQueuedMessage": {
+			if (message.payload) {
+				const { id, text, images } = message.payload as EditQueuedMessagePayload
+				provider.getCurrentTask()?.messageQueueService.updateMessage(id, text, images)
+			}
+
 			break
 		}
 	}

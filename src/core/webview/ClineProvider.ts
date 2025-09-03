@@ -41,13 +41,13 @@ import {
 	DEFAULT_MODES,
 } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
-import { CloudService, getRooCodeApiUrl } from "@roo-code/cloud"
+import { CloudService, BridgeOrchestrator, getRooCodeApiUrl } from "@roo-code/cloud"
 
 import { Package } from "../../shared/package"
 import { findLast } from "../../shared/array"
 import { supportPrompt } from "../../shared/support-prompt"
 import { GlobalFileNames } from "../../shared/globalFileNames"
-import { ExtensionMessage, MarketplaceInstalledMetadata } from "../../shared/ExtensionMessage"
+import type { ExtensionMessage, ExtensionState, MarketplaceInstalledMetadata } from "../../shared/ExtensionMessage"
 import { Mode, defaultModeSlug, getModeBySlug } from "../../shared/modes"
 import { experimentDefault } from "../../shared/experiments"
 import { formatLanguage } from "../../shared/language"
@@ -90,7 +90,6 @@ import { getSystemPromptFilePath } from "../prompts/sections/custom-system-promp
 import { webviewMessageHandler } from "./webviewMessageHandler"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
-import { FCOMessageHandler } from "../../services/file-changes/FCOMessageHandler"
 
 /**
  * https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default/weather-webview/src/providers/WeatherViewProvider.ts
@@ -121,7 +120,6 @@ export class ClineProvider
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
 
 	private recentTasksCache?: string[]
-	private globalFileChangeManager?: import("../../services/file-changes/FileChangeManager").FileChangeManager
 
 	public isViewLaunched = false
 	public settingsImportedAt?: number
@@ -186,6 +184,10 @@ export class ClineProvider
 			const onTaskInteractive = (taskId: string) => this.emit(RooCodeEventName.TaskInteractive, taskId)
 			const onTaskResumable = (taskId: string) => this.emit(RooCodeEventName.TaskResumable, taskId)
 			const onTaskIdle = (taskId: string) => this.emit(RooCodeEventName.TaskIdle, taskId)
+			const onTaskUserMessage = (taskId: string) => this.emit(RooCodeEventName.TaskUserMessage, taskId)
+			const onTaskPaused = (taskId: string) => this.emit(RooCodeEventName.TaskPaused, taskId)
+			const onTaskUnpaused = (taskId: string) => this.emit(RooCodeEventName.TaskUnpaused, taskId)
+			const onTaskSpawned = (taskId: string) => this.emit(RooCodeEventName.TaskSpawned, taskId)
 
 			// Attach the listeners.
 			instance.on(RooCodeEventName.TaskStarted, onTaskStarted)
@@ -197,6 +199,10 @@ export class ClineProvider
 			instance.on(RooCodeEventName.TaskInteractive, onTaskInteractive)
 			instance.on(RooCodeEventName.TaskResumable, onTaskResumable)
 			instance.on(RooCodeEventName.TaskIdle, onTaskIdle)
+			instance.on(RooCodeEventName.TaskUserMessage, onTaskUserMessage)
+			instance.on(RooCodeEventName.TaskPaused, onTaskPaused)
+			instance.on(RooCodeEventName.TaskUnpaused, onTaskUnpaused)
+			instance.on(RooCodeEventName.TaskSpawned, onTaskSpawned)
 
 			// Store the cleanup functions for later removal.
 			this.taskEventListeners.set(instance, [
@@ -209,6 +215,10 @@ export class ClineProvider
 				() => instance.off(RooCodeEventName.TaskInteractive, onTaskInteractive),
 				() => instance.off(RooCodeEventName.TaskResumable, onTaskResumable),
 				() => instance.off(RooCodeEventName.TaskIdle, onTaskIdle),
+				() => instance.off(RooCodeEventName.TaskUserMessage, onTaskUserMessage),
+				() => instance.off(RooCodeEventName.TaskPaused, onTaskPaused),
+				() => instance.off(RooCodeEventName.TaskUnpaused, onTaskUnpaused),
+				() => instance.off(RooCodeEventName.TaskSpawned, onTaskSpawned),
 			])
 		}
 
@@ -423,7 +433,7 @@ export class ClineProvider
 		await this.removeClineFromStack()
 		// Resume the last cline instance in the stack (if it exists - this is
 		// the 'parent' calling task).
-		await this.getCurrentTask()?.resumePausedTask(lastMessage)
+		await this.getCurrentTask()?.completeSubtask(lastMessage)
 	}
 
 	/*
@@ -476,8 +486,6 @@ export class ClineProvider
 		this.mcpHub = undefined
 		this.marketplaceManager?.cleanup()
 		this.customModesManager?.dispose()
-		this.globalFileChangeManager?.dispose()
-		this.globalFileChangeManager = undefined
 		this.log("Disposed all disposables")
 		ClineProvider.activeInstances.delete(this)
 
@@ -714,9 +722,7 @@ export class ClineProvider
 		await this.removeClineFromStack()
 	}
 
-public async createTaskWithHistoryItem(
-		historyItem: HistoryItem & { rootTask?: Task; parentTask?: Task; preservedFCOState?: any },
-	) {
+	public async createTaskWithHistoryItem(historyItem: HistoryItem & { rootTask?: Task; parentTask?: Task }) {
 		await this.removeClineFromStack()
 
 		// If the history item has a saved mode, restore it and its associated API configuration.
@@ -785,7 +791,7 @@ public async createTaskWithHistoryItem(
 			parentTask: historyItem.parentTask,
 			taskNumber: historyItem.number,
 			onCreated: this.taskCreationCallback,
-			enableBridge: false, // BridgeOrchestrator removed in main
+			enableBridge: BridgeOrchestrator.isEnabled(cloudUserInfo, remoteControlEnabled),
 		})
 
 		await this.addClineToStack(task)
@@ -793,37 +799,6 @@ public async createTaskWithHistoryItem(
 		this.log(
 			`[createTaskWithHistoryItem] ${task.parentTask ? "child" : "parent"} task ${task.taskId}.${task.instanceId} instantiated`,
 		)
-
-		// Restore preserved FCO state if provided (from task abort/cancel)
-		if (historyItem.preservedFCOState) {
-			try {
-				const fileChangeManager = await this.ensureFileChangeManager()
-				if (fileChangeManager && historyItem.preservedFCOState.files) {
-					// Restore the file changes in FileChangeManager
-					fileChangeManager.setFiles(historyItem.preservedFCOState.files)
-
-					// Send restored FCO state to webview
-					const filteredChangeset = await fileChangeManager.getLLMOnlyChanges(
-						task.taskId,
-						task.fileContextTracker,
-					)
-
-					if (filteredChangeset.files.length > 0) {
-						this.postMessageToWebview({
-							type: "filesChanged",
-							filesChanged: filteredChangeset,
-						})
-
-						this.log(
-							`[createTaskWithHistoryItem] Restored FCO state with ${filteredChangeset.files.length} LLM-only file changes`,
-						)
-					}
-				}
-			} catch (error) {
-				this.log(`[createTaskWithHistoryItem] Failed to restore FCO state: ${error}`)
-				// Non-critical error, don't fail task creation
-			}
-		}
 
 		return task
 	}
@@ -1008,17 +983,8 @@ public async createTaskWithHistoryItem(
 	 * @param webview A reference to the extension webview
 	 */
 	private setWebviewMessageListener(webview: vscode.Webview) {
-		const onReceiveMessage = async (message: WebviewMessage) => {
-			// Handle FCO messages first
-			const fcoMessageHandler = new FCOMessageHandler(this)
-			if (fcoMessageHandler.shouldHandleMessage(message)) {
-				await fcoMessageHandler.handleMessage(message)
-				return
-			}
-
-			// Delegate to main message handler
-			await webviewMessageHandler(this, message, this.marketplaceManager)
-		}
+		const onReceiveMessage = async (message: WebviewMessage) =>
+			webviewMessageHandler(this, message, this.marketplaceManager)
 
 		const messageDisposable = webview.onDidReceiveMessage(onReceiveMessage)
 		this.webviewDisposables.push(messageDisposable)
@@ -1029,16 +995,16 @@ public async createTaskWithHistoryItem(
 	 * @param newMode The mode to switch to
 	 */
 	public async handleModeSwitch(newMode: Mode) {
-		const cline = this.getCurrentTask()
+		const task = this.getCurrentTask()
 
-		if (cline) {
-			TelemetryService.instance.captureModeSwitch(cline.taskId, newMode)
-			cline.emit(RooCodeEventName.TaskModeSwitched, cline.taskId, newMode)
+		if (task) {
+			TelemetryService.instance.captureModeSwitch(task.taskId, newMode)
+			task.emit(RooCodeEventName.TaskModeSwitched, task.taskId, newMode)
 
 			try {
 				// Update the task history with the new mode first.
 				const history = this.getGlobalState("taskHistory") ?? []
-				const taskHistoryItem = history.find((item) => item.id === cline.taskId)
+				const taskHistoryItem = history.find((item) => item.id === task.taskId)
 
 				if (taskHistoryItem) {
 					taskHistoryItem.mode = newMode
@@ -1046,11 +1012,11 @@ public async createTaskWithHistoryItem(
 				}
 
 				// Only update the task's mode after successful persistence.
-				;(cline as any)._taskMode = newMode
+				;(task as any)._taskMode = newMode
 			} catch (error) {
 				// If persistence fails, log the error but don't update the in-memory state.
 				this.log(
-					`Failed to persist mode switch for task ${cline.taskId}: ${error instanceof Error ? error.message : String(error)}`,
+					`Failed to persist mode switch for task ${task.taskId}: ${error instanceof Error ? error.message : String(error)}`,
 				)
 
 				// Optionally, we could emit an event to notify about the failure.
@@ -1211,74 +1177,9 @@ public async createTaskWithHistoryItem(
 
 		await this.postStateToWebview()
 
-	if (providerSettings.apiProvider) {
-		this.emit(RooCodeEventName.ProviderProfileChanged, { name, provider: providerSettings.apiProvider })
-	}
-}
-
-public async cancelTask(): Promise<void> {
-	const cline = this.getCurrentTask()
-
-	if (!cline) {
-		return
-	}
-
-	console.log(`[cancelTask] cancelling task ${cline.taskId}.${cline.instanceId}`)
-
-	const { historyItem } = await this.getTaskWithId(cline.taskId)
-	// Preserve parent and root task information for history item.
-	const rootTask = cline.rootTask
-	const parentTask = cline.parentTask
-
-	// Preserve FCO state before aborting task to prevent FCO from disappearing
-	let preservedFCOState: any = undefined
-	try {
-		const fileChangeManager = this.getFileChangeManager()
-		if (fileChangeManager) {
-			preservedFCOState = fileChangeManager.getChanges()
-			this.log(`[cancelTask] Preserved FCO state with ${preservedFCOState.files.length} files`)
+		if (providerSettings.apiProvider) {
+			this.emit(RooCodeEventName.ProviderProfileChanged, { name, provider: providerSettings.apiProvider })
 		}
-	} catch (error) {
-		this.log(`[cancelTask] Failed to preserve FCO state: ${error}`)
-	}
-
-	cline.abortTask()
-
-	await pWaitFor(
-		() =>
-			this.getCurrentTask()! === undefined ||
-			this.getCurrentTask()!.isStreaming === false ||
-			this.getCurrentTask()!.didFinishAbortingStream ||
-			// If only the first chunk is processed, then there's no
-			// need to wait for graceful abort (closes edits, browser,
-			// etc).
-			this.getCurrentTask()!.isWaitingForFirstChunk,
-		{
-			timeout: 3_000,
-		},
-	).catch(() => {
-		console.error("Failed to abort task")
-	})
-
-	if (this.getCurrentTask()) {
-		// 'abandoned' will prevent this Cline instance from affecting
-		// future Cline instances. This may happen if its hanging on a
-		// streaming request.
-		this.getCurrentTask()!.abandoned = true
-	}
-
-	// Clears task again, so we need to abortTask manually above.
-	await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask, preservedFCOState })
-}
-
-// Clear the current task without treating it as a subtask.
-// This is used when the user cancels a task that is not a subtask.
-public async clearTask(): Promise<void> {
-	if (this.clineStack.length > 0) {
-		const task = this.clineStack[this.clineStack.length - 1]
-		console.log(`[clearTask] clearing task ${task.taskId}.${task.instanceId}`)
-		await this.removeClineFromStack()
-	}
 	}
 
 	async updateCustomInstructions(instructions?: string) {
@@ -1321,14 +1222,16 @@ public async clearTask(): Promise<void> {
 	// OpenRouter
 
 	async handleOpenRouterCallback(code: string) {
-		let { apiConfiguration, currentApiConfigName } = await this.getState()
+		let { apiConfiguration, currentApiConfigName = "default" } = await this.getState()
 
 		let apiKey: string
+
 		try {
 			const baseUrl = apiConfiguration.openRouterBaseUrl || "https://openrouter.ai/api/v1"
-			// Extract the base domain for the auth endpoint
+			// Extract the base domain for the auth endpoint.
 			const baseUrlDomain = baseUrl.match(/^(https?:\/\/[^\/]+)/)?.[1] || "https://openrouter.ai"
 			const response = await axios.post(`${baseUrlDomain}/api/v1/auth/keys`, { code })
+
 			if (response.data && response.data.key) {
 				apiKey = response.data.key
 			} else {
@@ -1338,6 +1241,7 @@ public async clearTask(): Promise<void> {
 			this.log(
 				`Error exchanging code for API key: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`,
 			)
+
 			throw error
 		}
 
@@ -1355,8 +1259,10 @@ public async clearTask(): Promise<void> {
 
 	async handleGlamaCallback(code: string) {
 		let apiKey: string
+
 		try {
 			const response = await axios.post("https://glama.ai/api/gateway/v1/auth/exchange-code", { code })
+
 			if (response.data && response.data.apiKey) {
 				apiKey = response.data.apiKey
 			} else {
@@ -1366,10 +1272,11 @@ public async clearTask(): Promise<void> {
 			this.log(
 				`Error exchanging code for API key: ${JSON.stringify(error, Object.getOwnPropertyNames(error), 2)}`,
 			)
+
 			throw error
 		}
 
-		const { apiConfiguration, currentApiConfigName } = await this.getState()
+		const { apiConfiguration, currentApiConfigName = "default" } = await this.getState()
 
 		const newConfiguration: ProviderSettings = {
 			...apiConfiguration,
@@ -1384,7 +1291,7 @@ public async clearTask(): Promise<void> {
 	// Requesty
 
 	async handleRequestyCallback(code: string) {
-		let { apiConfiguration, currentApiConfigName } = await this.getState()
+		let { apiConfiguration, currentApiConfigName = "default" } = await this.getState()
 
 		const newConfiguration: ProviderSettings = {
 			...apiConfiguration,
@@ -1642,7 +1549,7 @@ public async clearTask(): Promise<void> {
 		}
 	}
 
-	async getStateToPostToWebview() {
+	async getStateToPostToWebview(): Promise<ExtensionState> {
 		const {
 			apiConfiguration,
 			lastShownAnnouncementId,
@@ -1732,6 +1639,7 @@ public async clearTask(): Promise<void> {
 			remoteControlEnabled,
 			openRouterImageApiKey,
 			openRouterImageGenerationSelectedModel,
+			openRouterUseMiddleOutTransform,
 		} = await this.getState()
 
 		const telemetryKey = process.env.POSTHOG_API_KEY
@@ -1769,6 +1677,7 @@ public async clearTask(): Promise<void> {
 				: undefined,
 			clineMessages: this.getCurrentTask()?.clineMessages || [],
 			currentTaskTodos: this.getCurrentTask()?.todoList || [],
+			messageQueue: this.getCurrentTask()?.messageQueueService?.messages,
 			taskHistory: (taskHistory || [])
 				.filter((item: HistoryItem) => item.ts && item.task)
 				.sort((a: HistoryItem, b: HistoryItem) => b.ts - a.ts),
@@ -1862,10 +1771,10 @@ public async clearTask(): Promise<void> {
 			includeDiagnosticMessages: includeDiagnosticMessages ?? true,
 			maxDiagnosticMessages: maxDiagnosticMessages ?? 50,
 			includeTaskHistoryInEnhance: includeTaskHistoryInEnhance ?? true,
-		remoteControlEnabled,
-		filesChangedEnabled: this.getGlobalState("filesChangedEnabled") ?? true,
-		openRouterImageApiKey,
-		openRouterImageGenerationSelectedModel,
+			remoteControlEnabled,
+			openRouterImageApiKey,
+			openRouterImageGenerationSelectedModel,
+			openRouterUseMiddleOutTransform,
 		}
 	}
 
@@ -1875,7 +1784,17 @@ public async clearTask(): Promise<void> {
 	 * https://www.eliostruyf.com/devhack-code-extension-storage-options/
 	 */
 
-	async getState() {
+	async getState(): Promise<
+		Omit<
+			ExtensionState,
+			| "clineMessages"
+			| "renderContext"
+			| "hasOpenedModeSelector"
+			| "version"
+			| "shouldShowAnnouncement"
+			| "hasSystemPromptOverride"
+		>
+	> {
 		const stateValues = this.contextProxy.getValues()
 		const customModes = await this.customModesManager.getCustomModes()
 
@@ -1943,7 +1862,7 @@ public async clearTask(): Promise<void> {
 			)
 		}
 
-		// Return the same structure as before
+		// Return the same structure as before.
 		return {
 			apiConfiguration: providerSettings,
 			lastShownAnnouncementId: stateValues.lastShownAnnouncementId,
@@ -1967,7 +1886,7 @@ public async clearTask(): Promise<void> {
 			allowedMaxCost: stateValues.allowedMaxCost,
 			autoCondenseContext: stateValues.autoCondenseContext ?? true,
 			autoCondenseContextPercent: stateValues.autoCondenseContextPercent ?? 100,
-			taskHistory: stateValues.taskHistory,
+			taskHistory: stateValues.taskHistory ?? [],
 			allowedCommands: stateValues.allowedCommands,
 			deniedCommands: stateValues.deniedCommands,
 			soundEnabled: stateValues.soundEnabled ?? false,
@@ -2014,7 +1933,7 @@ public async clearTask(): Promise<void> {
 			customModes,
 			maxOpenTabsContext: stateValues.maxOpenTabsContext ?? 20,
 			maxWorkspaceFiles: stateValues.maxWorkspaceFiles ?? 200,
-			openRouterUseMiddleOutTransform: stateValues.openRouterUseMiddleOutTransform ?? true,
+			openRouterUseMiddleOutTransform: stateValues.openRouterUseMiddleOutTransform,
 			browserToolEnabled: stateValues.browserToolEnabled ?? true,
 			telemetrySetting: stateValues.telemetrySetting || "unset",
 			showRooIgnoredFiles: stateValues.showRooIgnoredFiles ?? false,
@@ -2028,7 +1947,6 @@ public async clearTask(): Promise<void> {
 			sharingEnabled,
 			organizationAllowList,
 			organizationSettingsVersion,
-			// Explicitly add condensing settings
 			condensingApiConfigId: stateValues.condensingApiConfigId,
 			customCondensingPrompt: stateValues.customCondensingPrompt,
 			codebaseIndexModels: stateValues.codebaseIndexModels ?? EMBEDDING_MODEL_PROFILES,
@@ -2048,14 +1966,20 @@ public async clearTask(): Promise<void> {
 				codebaseIndexSearchMinScore: stateValues.codebaseIndexConfig?.codebaseIndexSearchMinScore,
 			},
 			profileThresholds: stateValues.profileThresholds ?? {},
-			// Add diagnostic message settings
 			includeDiagnosticMessages: stateValues.includeDiagnosticMessages ?? true,
 			maxDiagnosticMessages: stateValues.maxDiagnosticMessages ?? 50,
-			// Add includeTaskHistoryInEnhance setting
 			includeTaskHistoryInEnhance: stateValues.includeTaskHistoryInEnhance ?? true,
-			// Remote control functionality removed in main branch
-			remoteControlEnabled: false,
-			// Add image generation settings
+			remoteControlEnabled: (() => {
+				try {
+					const cloudSettings = CloudService.instance.getUserSettings()
+					return cloudSettings?.settings?.extensionBridgeEnabled ?? false
+				} catch (error) {
+					console.error(
+						`[getState] failed to get remote control setting from cloud: ${error instanceof Error ? error.message : String(error)}`,
+					)
+					return false
+				}
+			})(),
 			openRouterImageApiKey: stateValues.openRouterImageApiKey,
 			openRouterImageGenerationSelectedModel: stateValues.openRouterImageGenerationSelectedModel,
 		}
@@ -2085,7 +2009,7 @@ public async clearTask(): Promise<void> {
 	}
 
 	// @deprecated - Use `ContextProxy#getValue` instead.
-	public getGlobalState<K extends keyof GlobalState>(key: K) {
+	private getGlobalState<K extends keyof GlobalState>(key: K) {
 		return this.contextProxy.getValue(key)
 	}
 
@@ -2179,8 +2103,40 @@ public async clearTask(): Promise<void> {
 			return
 		}
 
-		// BridgeOrchestrator functionality removed in main branch
-		this.log(`[ClineProvider#remoteControlEnabled] Remote control ${enabled ? 'enabled' : 'disabled'}`)
+		await BridgeOrchestrator.connectOrDisconnect(userInfo, enabled, {
+			...config,
+			provider: this,
+			sessionId: vscode.env.sessionId,
+		})
+
+		const bridge = BridgeOrchestrator.getInstance()
+
+		if (bridge) {
+			const currentTask = this.getCurrentTask()
+
+			if (currentTask && !currentTask.enableBridge) {
+				try {
+					currentTask.enableBridge = true
+					await BridgeOrchestrator.subscribeToTask(currentTask)
+				} catch (error) {
+					const message = `[ClineProvider#remoteControlEnabled] BridgeOrchestrator.subscribeToTask() failed: ${error instanceof Error ? error.message : String(error)}`
+					this.log(message)
+					console.error(message)
+				}
+			}
+		} else {
+			for (const task of this.clineStack) {
+				if (task.enableBridge) {
+					try {
+						await BridgeOrchestrator.getInstance()?.unsubscribeFromTask(task.taskId)
+					} catch (error) {
+						const message = `[ClineProvider#remoteControlEnabled] BridgeOrchestrator#unsubscribeFromTask() failed: ${error instanceof Error ? error.message : String(error)}`
+						this.log(message)
+						console.error(message)
+					}
+				}
+			}
+		}
 	}
 
 	/**
@@ -2367,7 +2323,7 @@ public async clearTask(): Promise<void> {
 			parentTask,
 			taskNumber: this.clineStack.length + 1,
 			onCreated: this.taskCreationCallback,
-			enableBridge: false, // BridgeOrchestrator removed in main
+			enableBridge: BridgeOrchestrator.isEnabled(cloudUserInfo, remoteControlEnabled),
 			initialTodos: options.initialTodos,
 			...options,
 		})
@@ -2381,6 +2337,59 @@ public async clearTask(): Promise<void> {
 		return task
 	}
 
+	public async cancelTask(): Promise<void> {
+		const task = this.getCurrentTask()
+
+		if (!task) {
+			return
+		}
+
+		console.log(`[cancelTask] cancelling task ${task.taskId}.${task.instanceId}`)
+
+		const { historyItem } = await this.getTaskWithId(task.taskId)
+
+		// Preserve parent and root task information for history item.
+		const rootTask = task.rootTask
+		const parentTask = task.parentTask
+
+		task.abortTask()
+
+		await pWaitFor(
+			() =>
+				this.getCurrentTask()! === undefined ||
+				this.getCurrentTask()!.isStreaming === false ||
+				this.getCurrentTask()!.didFinishAbortingStream ||
+				// If only the first chunk is processed, then there's no
+				// need to wait for graceful abort (closes edits, browser,
+				// etc).
+				this.getCurrentTask()!.isWaitingForFirstChunk,
+			{
+				timeout: 3_000,
+			},
+		).catch(() => {
+			console.error("Failed to abort task")
+		})
+
+		if (this.getCurrentTask()) {
+			// 'abandoned' will prevent this Cline instance from affecting
+			// future Cline instances. This may happen if its hanging on a
+			// streaming request.
+			this.getCurrentTask()!.abandoned = true
+		}
+
+		// Clears task again, so we need to abortTask manually above.
+		await this.createTaskWithHistoryItem({ ...historyItem, rootTask, parentTask })
+	}
+
+	// Clear the current task without treating it as a subtask.
+	// This is used when the user cancels a task that is not a subtask.
+	public async clearTask(): Promise<void> {
+		if (this.clineStack.length > 0) {
+			const task = this.clineStack[this.clineStack.length - 1]
+			console.log(`[clearTask] clearing task ${task.taskId}.${task.instanceId}`)
+			await this.removeClineFromStack()
+		}
+	}
 
 	public resumeTask(taskId: string): void {
 		// Use the existing showTaskWithId method which handles both current and
@@ -2393,7 +2402,12 @@ public async clearTask(): Promise<void> {
 	// Modes
 
 	public async getModes(): Promise<{ slug: string; name: string }[]> {
-		return DEFAULT_MODES.map((mode) => ({ slug: mode.slug, name: mode.name }))
+		try {
+			const customModes = await this.customModesManager.getCustomModes()
+			return [...DEFAULT_MODES, ...customModes].map(({ slug, name }) => ({ slug, name }))
+		} catch (error) {
+			return DEFAULT_MODES.map(({ slug, name }) => ({ slug, name }))
+		}
 	}
 
 	public async getMode(): Promise<string> {
@@ -2408,12 +2422,12 @@ public async clearTask(): Promise<void> {
 	// Provider Profiles
 
 	public async getProviderProfiles(): Promise<{ name: string; provider?: string }[]> {
-		const { listApiConfigMeta } = await this.getState()
+		const { listApiConfigMeta = [] } = await this.getState()
 		return listApiConfigMeta.map((profile) => ({ name: profile.name, provider: profile.apiProvider }))
 	}
 
 	public async getProviderProfile(): Promise<string> {
-		const { currentApiConfigName } = await this.getState()
+		const { currentApiConfigName = "default" } = await this.getState()
 		return currentApiConfigName
 	}
 
@@ -2464,7 +2478,7 @@ public async clearTask(): Promise<void> {
 	}
 
 	private async getTaskProperties(): Promise<DynamicAppProperties & TaskProperties> {
-		const { language, mode, apiConfiguration } = await this.getState()
+		const { language = "en", mode, apiConfiguration } = await this.getState()
 
 		const task = this.getCurrentTask()
 		const todoList = task?.todoList
@@ -2510,22 +2524,6 @@ public async clearTask(): Promise<void> {
 			...(await this.getTaskProperties()),
 			...(await this.getGitProperties()),
 		}
-	}
-
-	public getFileChangeManager():
-		| import("../../services/file-changes/FileChangeManager").FileChangeManager
-		| undefined {
-		return this.globalFileChangeManager
-	}
-
-	public async ensureFileChangeManager(): Promise<
-		import("../../services/file-changes/FileChangeManager").FileChangeManager
-	> {
-		if (!this.globalFileChangeManager) {
-			const { FileChangeManager } = await import("../../services/file-changes/FileChangeManager")
-			this.globalFileChangeManager = new FileChangeManager("HEAD")
-		}
-		return this.globalFileChangeManager
 	}
 
 	public get cwd() {
