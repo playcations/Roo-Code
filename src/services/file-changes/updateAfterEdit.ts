@@ -84,8 +84,8 @@ export async function updateFCOAfterEdit(task: Task): Promise<void> {
 			const updatedFiles = [...existingFiles]
 
 			// Update or add new files with per-file baseline changes
-			updatedChanges.forEach((newChange) => {
-				const existingIndex = updatedFiles.findIndex((existing) => existing.uri === newChange.uri)
+			updatedChanges.forEach((newChange: any) => {
+				const existingIndex = updatedFiles.findIndex((existing: any) => existing.uri === newChange.uri)
 				if (existingIndex >= 0) {
 					updatedFiles[existingIndex] = newChange // Update existing
 				} else {

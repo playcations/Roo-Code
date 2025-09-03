@@ -384,10 +384,11 @@ export async function checkpointSave(cline: Task, force = false, files?: vscode.
 	const saveKey = `${force}-${filesKey}`
 
 	// If there's already an ongoing checkpoint save for this exact operation, return the existing promise
-	if (cline.ongoingCheckpointSaves.has(saveKey)) {
+	if (cline.ongoingCheckpointSaves && cline.ongoingCheckpointSaves.has(saveKey)) {
 		const provider = cline.providerRef.deref()
 		provider?.log(`[checkpointSave] duplicate checkpoint save detected for ${saveKey}, using existing operation`)
-		return cline.ongoingCheckpointSaves.get(saveKey)
+		// Since ongoingCheckpointSaves is a Map, we can get the promise
+		return (cline.ongoingCheckpointSaves as any).get(saveKey)
 	}
 	const service = await getInitializedCheckpointService(cline)
 
@@ -432,10 +433,16 @@ export async function checkpointSave(cline: Task, force = false, files?: vscode.
 		})
 		.finally(() => {
 			// Clean up the tracking once completed
-			cline.ongoingCheckpointSaves.delete(saveKey)
+			if (cline.ongoingCheckpointSaves) {
+				cline.ongoingCheckpointSaves.delete(saveKey)
+			}
 		})
 
-	cline.ongoingCheckpointSaves.set(saveKey, savePromise)
+	// Initialize as Map if not already
+	if (!cline.ongoingCheckpointSaves) {
+		cline.ongoingCheckpointSaves = new Map() as any
+	}
+	;(cline.ongoingCheckpointSaves as any).set(saveKey, savePromise)
 	return savePromise
 }
 

@@ -110,7 +110,7 @@ export class FCOMessageHandler {
 		if (message.uri && diffFileChangeManager && task?.checkpointService) {
 			// Get the file change information
 			const changeset = diffFileChangeManager.getChanges()
-			const fileChange = changeset.files.find((f) => f.uri === message.uri)
+			const fileChange = changeset.files.find((f: any) => f.uri === message.uri)
 
 			if (fileChange) {
 				try {
@@ -300,7 +300,7 @@ export class FCOMessageHandler {
 
 			// Filter files if specific URIs provided, otherwise use all files
 			const filesToReject = message.uris
-				? changeset.files.filter((file) => message.uris!.includes(file.uri))
+				? changeset.files.filter((file: any) => message.uris!.includes(file.uri))
 				: changeset.files
 
 			// Get the current task and checkpoint service
@@ -429,7 +429,7 @@ export class FCOMessageHandler {
 	 */
 	private async handleFilesChangedEnabled(message: WebviewMessage, task: any): Promise<void> {
 		const filesChangedEnabled = message.bool ?? true
-		const previousFilesChangedEnabled = this.provider.getGlobalState("filesChangedEnabled") ?? true
+		const previousFilesChangedEnabled = (this.provider as any).getGlobalState("filesChangedEnabled") ?? true
 
 		// Update global state
 		await this.provider.contextProxy.setValue("filesChangedEnabled", filesChangedEnabled)
