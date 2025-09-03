@@ -52,6 +52,8 @@ export interface WebviewMessage {
 		| "webviewDidLaunch"
 		| "webviewReady"
 		| "filesChangedRequest"
+		| "filesChangedEnabled"
+		| "filesChangedBaselineUpdate"
 		| "viewDiff"
 		| "acceptFileChange"
 		| "rejectFileChange"
@@ -274,6 +276,8 @@ export interface WebviewMessage {
 	visibility?: ShareVisibility // For share visibility
 	hasContent?: boolean // For checkRulesDirectoryResult
 	checkOnly?: boolean // For deleteCustomMode check
+	fileChanges?: any[] // For filesChanged message
+	baseline?: string // For filesChangedBaselineUpdate
 	codeIndexSettings?: {
 		// Global state settings
 		codebaseIndexEnabled: boolean

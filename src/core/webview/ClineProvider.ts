@@ -118,6 +118,7 @@ export class ClineProvider
 	private mdmService?: MdmService
 	private taskCreationCallback: (task: Task) => void
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
+	private fileChangeManager?: any // FileChangeManager instance
 
 	private recentTasksCache?: string[]
 
@@ -1654,6 +1655,7 @@ export class ClineProvider
 
 		return {
 			version: this.context.extension?.packageJSON?.version ?? "",
+			filesChangedEnabled: false, // Add this property
 			apiConfiguration,
 			customInstructions,
 			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,
@@ -1864,6 +1866,7 @@ export class ClineProvider
 
 		// Return the same structure as before.
 		return {
+			filesChangedEnabled: false, // Add this property
 			apiConfiguration: providerSettings,
 			lastShownAnnouncementId: stateValues.lastShownAnnouncementId,
 			customInstructions: stateValues.customInstructions,
@@ -2011,6 +2014,20 @@ export class ClineProvider
 	// @deprecated - Use `ContextProxy#getValue` instead.
 	private getGlobalState<K extends keyof GlobalState>(key: K) {
 		return this.contextProxy.getValue(key)
+	}
+
+	// File Change Manager methods
+	public getFileChangeManager(): any {
+		return this.fileChangeManager
+	}
+
+	public ensureFileChangeManager(): any {
+		if (!this.fileChangeManager) {
+			// Import and create FileChangeManager instance
+			const { FileChangeManager } = require("../../services/file-changes/FileChangeManager")
+			this.fileChangeManager = new FileChangeManager()
+		}
+		return this.fileChangeManager
 	}
 
 	public async setValue<K extends keyof RooCodeSettings>(key: K, value: RooCodeSettings[K]) {

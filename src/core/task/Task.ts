@@ -267,6 +267,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	enableCheckpoints: boolean
 	checkpointService?: RepoPerTaskCheckpointService
 	checkpointServiceInitializing = false
+	ongoingCheckpointSaves?: Set<string>
 
 	// Task Bridge
 	enableBridge: boolean
