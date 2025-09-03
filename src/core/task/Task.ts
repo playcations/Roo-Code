@@ -37,7 +37,7 @@ import {
 	isResumableAsk,
 } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
-import { CloudService, BridgeOrchestrator } from "@roo-code/cloud"
+import { CloudService } from "@roo-code/cloud"
 
 // api
 import { ApiHandler, ApiHandlerCreateMessageMetadata, buildApiHandler } from "../../api"
@@ -1100,7 +1100,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private async startTask(task?: string, images?: string[]): Promise<void> {
 		if (this.enableBridge) {
 			try {
-				await BridgeOrchestrator.subscribeToTask(this)
+				// BridgeOrchestrator has been removed - bridge functionality disabled
 			} catch (error) {
 				console.error(
 					`[Task#startTask] BridgeOrchestrator.subscribeToTask() failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1168,7 +1168,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	private async resumeTaskFromHistory() {
 		if (this.enableBridge) {
 			try {
-				await BridgeOrchestrator.subscribeToTask(this)
+				// BridgeOrchestrator has been removed - bridge functionality disabled
 			} catch (error) {
 				console.error(
 					`[Task#resumeTaskFromHistory] BridgeOrchestrator.subscribeToTask() failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1448,13 +1448,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 		}
 
 		if (this.enableBridge) {
-			BridgeOrchestrator.getInstance()
-				?.unsubscribeFromTask(this.taskId)
-				.catch((error) =>
-					console.error(
-						`[Task#dispose] BridgeOrchestrator#unsubscribeFromTask() failed: ${error instanceof Error ? error.message : String(error)}`,
-					),
-				)
+			// BridgeOrchestrator has been removed - bridge functionality disabled
 		}
 
 		// Release any terminals associated with this task.

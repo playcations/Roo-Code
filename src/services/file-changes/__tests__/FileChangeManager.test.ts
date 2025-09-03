@@ -136,16 +136,16 @@ describe("FileChangeManager (Simplified)", () => {
 
 			await fileChangeManager.acceptChange("test.txt")
 
-			// Accepted files are not filtered out by getChanges anymore
+			// Accepted files disappear (no diff from baseline)
 			const changes = fileChangeManager.getChanges()
-			expect(changes.files).toHaveLength(1)
+			expect(changes.files).toHaveLength(0)
 
 			// Check that the accepted baseline was stored correctly
 			const acceptedBaseline = fileChangeManager["acceptedBaselines"].get("test.txt")
 			expect(acceptedBaseline).toBe("current")
 		})
 
-		it("should remove from rejected if previously rejected", async () => {
+		it("should handle reject then accept scenario", async () => {
 			const testFile: FileChange = {
 				uri: "test.txt",
 				type: "edit",
@@ -157,21 +157,22 @@ describe("FileChangeManager (Simplified)", () => {
 
 			fileChangeManager.setFiles([testFile])
 
-			// First reject, then accept
+			// First reject
 			await fileChangeManager.rejectChange("test.txt")
-			// File should be hidden when rejected
+			// File should be hidden when rejected (removed from changeset)
 			let rejectedChanges = fileChangeManager.getChanges()
 			expect(rejectedChanges.files).toHaveLength(0)
 
+			// Try to accept rejected file (should do nothing since file is not in changeset)
 			await fileChangeManager.acceptChange("test.txt")
 
-			// File should reappear when accepted (no longer filtered as rejected)
+			// Still no files (can't accept a file that's not in changeset)
 			const changes = fileChangeManager.getChanges()
-			expect(changes.files).toHaveLength(1)
+			expect(changes.files).toHaveLength(0)
 
-			// Should have correct accepted baseline
+			// Baseline should still be set to initial checkpoint from setFiles
 			const acceptedBaseline = fileChangeManager["acceptedBaselines"].get("test.txt")
-			expect(acceptedBaseline).toBe("current")
+			expect(acceptedBaseline).toBe("initial-checkpoint")
 		})
 	})
 
@@ -220,15 +221,18 @@ describe("FileChangeManager (Simplified)", () => {
 
 			await fileChangeManager.acceptAll()
 
-			// Accepted files are not filtered out by getChanges anymore
+			// Accepted files disappear (no diff from baseline)
 			const changes = fileChangeManager.getChanges()
-			expect(changes.files).toHaveLength(2) // All files still present
+			expect(changes.files).toHaveLength(0) // All files disappear
 
-			// Check that both files have their baselines stored correctly
+			// Check that baselines are cleared after acceptAll (new global baseline)
 			const baseline1 = fileChangeManager["acceptedBaselines"].get("file1.txt")
 			const baseline2 = fileChangeManager["acceptedBaselines"].get("file2.txt")
-			expect(baseline1).toBe("current")
-			expect(baseline2).toBe("current")
+			expect(baseline1).toBeUndefined()
+			expect(baseline2).toBeUndefined()
+
+			// Check that global baseline was updated
+			expect(fileChangeManager.getChanges().baseCheckpoint).toBe("current")
 		})
 	})
 
@@ -888,21 +892,29 @@ describe("FileChangeManager (Simplified)", () => {
 				linesRemoved: 3,
 			}
 
+			// Mock the checkpoint service to return the expected diff
+			mockCheckpointService.getDiff.mockResolvedValue([
+				{
+					paths: { relative: "test.txt", newFile: false, deletedFile: false },
+					content: { before: "content v1", after: "content v2" },
+				},
+			])
+
 			const result = await fileChangeManager.applyPerFileBaselines(
 				[newChange],
 				mockCheckpointService,
 				"checkpoint2",
 			)
 
-			// Should reappear with cumulative changes from global baseline
+			// Should reappear with incremental changes from rejection baseline
 			expect(result).toHaveLength(1)
 			expect(result[0]).toEqual({
 				uri: "test.txt",
 				type: "edit",
 				fromCheckpoint: "baseline", // Global baseline
 				toCheckpoint: "checkpoint2",
-				linesAdded: 8,
-				linesRemoved: 3,
+				linesAdded: 1, // Calculated from mock content
+				linesRemoved: 1, // Calculated from mock content
 			})
 		})
 
@@ -1054,6 +1066,14 @@ describe("FileChangeManager (Simplified)", () => {
 					linesRemoved: 0,
 				},
 			]
+
+			// Mock the checkpoint service to return changes only for file1 (changed)
+			mockCheckpointService.getDiff.mockResolvedValue([
+				{
+					paths: { relative: "file1.txt", newFile: false, deletedFile: false },
+					content: { before: "original content", after: "modified content" },
+				},
+			])
 
 			const result = await fileChangeManager.applyPerFileBaselines(
 				newChanges,

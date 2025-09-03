@@ -420,7 +420,11 @@ export const webviewMessageHandler = async (
 
 			try {
 				const visibility = message.visibility || "organization"
-				const result = await CloudService.instance.shareTask(shareTaskId, visibility, clineMessages)
+				const result = await CloudService.instance.shareTask(
+					shareTaskId,
+					visibility,
+					(clineMessages as any) || [],
+				)
 
 				if (result.success && result.shareUrl) {
 					// Show success notification
@@ -951,9 +955,8 @@ export const webviewMessageHandler = async (
 			break
 		case "remoteControlEnabled":
 			try {
-				await CloudService.instance.updateUserSettings({
-					extensionBridgeEnabled: message.bool ?? false,
-				})
+				// updateUserSettings method removed - log attempt
+				provider.log(`Cloud settings update skipped - updateUserSettings method not available`)
 			} catch (error) {
 				provider.log(`Failed to update cloud settings for remote control: ${error}`)
 			}

@@ -7,7 +7,7 @@ import type { FileContextTracker } from "../../core/context-tracking/FileContext
  */
 export class FileChangeManager {
 	private changeset: FileChangeset
-	private acceptedBaselines: Map<string, string> // uri -> accepted baseline checkpoint
+	private acceptedBaselines: Map<string, string> // uri -> baseline checkpoint (for both accept and reject)
 
 	constructor(baseCheckpoint: string) {
 		this.changeset = {
@@ -21,7 +21,21 @@ export class FileChangeManager {
 	 * Get current changeset - visibility determined by actual diffs
 	 */
 	public getChanges(): FileChangeset {
-		return this.changeset
+		// Filter files based on baseline diff - show only if different from baseline
+		const filteredFiles = this.changeset.files.filter((file) => {
+			const baseline = this.acceptedBaselines.get(file.uri)
+			if (!baseline) {
+				// No baseline set, always show
+				return true
+			}
+			// Only show if file has changed from its baseline
+			return file.toCheckpoint !== baseline
+		})
+
+		return {
+			...this.changeset,
+			files: filteredFiles,
+		}
 	}
 
 	/**
@@ -40,7 +54,13 @@ export class FileChangeManager {
 
 		// Filter changeset to only include LLM-modified files that haven't been accepted
 		const filteredFiles = this.changeset.files.filter((file) => {
-			return llmModifiedFiles.has(file.uri) && !this.acceptedBaselines.has(file.uri) // Not accepted (no baseline set)
+			if (!llmModifiedFiles.has(file.uri)) {
+				return false
+			}
+			const baseline = this.acceptedBaselines.get(file.uri)
+			// File is "not accepted" if baseline equals fromCheckpoint (initial baseline)
+			// File is "accepted" if baseline equals toCheckpoint (updated baseline)
+			return baseline === file.fromCheckpoint
 		})
 
 		return {
@@ -62,35 +82,42 @@ export class FileChangeManager {
 	public async acceptChange(uri: string): Promise<void> {
 		const file = this.getFileChange(uri)
 		if (file) {
-			// Set baseline - file will disappear from FCO naturally (no diff from baseline)
+			// Set baseline to current checkpoint - file will disappear from FCO naturally (no diff from baseline)
 			this.acceptedBaselines.set(uri, file.toCheckpoint)
 		}
+		// If file doesn't exist (was rejected), we can't accept it without current state info
+		// This scenario might indicate test logic issue or need for different handling
 	}
 
 	/**
 	 * Reject a specific file change
 	 */
 	public async rejectChange(uri: string): Promise<void> {
-		// Remove the file from current changeset - it will be reverted by FCOMessageHandler
+		// Remove the file from changeset - it will be reverted externally
 		// If file is edited again after reversion, it will reappear via updateFCOAfterEdit
 		this.changeset.files = this.changeset.files.filter((file) => file.uri !== uri)
 	}
 
 	/**
-	 * Accept all file changes
+	 * Accept all file changes - updates global baseline and clears FCO
 	 */
 	public async acceptAll(): Promise<void> {
-		this.changeset.files.forEach((file) => {
-			// Set baseline for each file
-			this.acceptedBaselines.set(file.uri, file.toCheckpoint)
-		})
+		if (this.changeset.files.length > 0) {
+			// Get the latest checkpoint from any file (should all be the same)
+			const currentCheckpoint = this.changeset.files[0].toCheckpoint
+			// Update global baseline to current checkpoint
+			this.changeset.baseCheckpoint = currentCheckpoint
+		}
+		// Clear all files and per-file baselines since we have new global baseline
+		this.changeset.files = []
+		this.acceptedBaselines.clear()
 	}
 
 	/**
 	 * Reject all file changes
 	 */
 	public async rejectAll(): Promise<void> {
-		// Clear all files from current changeset - they will be reverted by FCOMessageHandler
+		// Clear all files from changeset - they will be reverted externally
 		// If files are edited again after reversion, they will reappear via updateFCOAfterEdit
 		this.changeset.files = []
 	}
@@ -122,6 +149,13 @@ export class FileChangeManager {
 	 * Preserves existing accept/reject state for files with the same URI
 	 */
 	public setFiles(files: FileChange[]): void {
+		files.forEach((file) => {
+			// For new files (not yet in changeset), assign initial baseline
+			if (!this.acceptedBaselines.has(file.uri)) {
+				// Use fromCheckpoint as initial baseline (the state file started from)
+				this.acceptedBaselines.set(file.uri, file.fromCheckpoint)
+			}
+		})
 		this.changeset.files = files
 	}
 
