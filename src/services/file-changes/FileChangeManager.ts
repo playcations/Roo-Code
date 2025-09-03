@@ -1,4 +1,4 @@
-import { FileChange, FileChangeset } from "@roo-code/types"
+import { FileChange, FileChangeset, FileChangeType } from "@roo-code/types"
 import type { FileContextTracker } from "../../core/context-tracking/FileContextTracker"
 
 /**
@@ -7,30 +7,21 @@ import type { FileContextTracker } from "../../core/context-tracking/FileContext
  */
 export class FileChangeManager {
 	private changeset: FileChangeset
-	private acceptedFiles: Set<string>
-	private rejectedFiles: Set<string>
+	private acceptedBaselines: Map<string, string> // uri -> accepted baseline checkpoint
 
 	constructor(baseCheckpoint: string) {
 		this.changeset = {
 			baseCheckpoint,
 			files: [],
 		}
-		this.acceptedFiles = new Set()
-		this.rejectedFiles = new Set()
+		this.acceptedBaselines = new Map()
 	}
 
 	/**
-	 * Get current changeset with accepted/rejected files filtered out
+	 * Get current changeset - visibility determined by actual diffs
 	 */
 	public getChanges(): FileChangeset {
-		const filteredFiles = this.changeset.files.filter(
-			(file) => !this.acceptedFiles.has(file.uri) && !this.rejectedFiles.has(file.uri),
-		)
-
-		return {
-			...this.changeset,
-			files: filteredFiles,
-		}
+		return this.changeset
 	}
 
 	/**
@@ -47,13 +38,10 @@ export class FileChangeManager {
 				.map((entry) => entry.path),
 		)
 
-		// Filter changeset to only include LLM-modified files
-		const filteredFiles = this.changeset.files.filter(
-			(file) =>
-				llmModifiedFiles.has(file.uri) &&
-				!this.acceptedFiles.has(file.uri) &&
-				!this.rejectedFiles.has(file.uri),
-		)
+		// Filter changeset to only include LLM-modified files that haven't been accepted
+		const filteredFiles = this.changeset.files.filter((file) => {
+			return llmModifiedFiles.has(file.uri) && !this.acceptedBaselines.has(file.uri) // Not accepted (no baseline set)
+		})
 
 		return {
 			...this.changeset,
@@ -72,16 +60,20 @@ export class FileChangeManager {
 	 * Accept a specific file change
 	 */
 	public async acceptChange(uri: string): Promise<void> {
-		this.acceptedFiles.add(uri)
-		this.rejectedFiles.delete(uri)
+		const file = this.getFileChange(uri)
+		if (file) {
+			// Set baseline - file will disappear from FCO naturally (no diff from baseline)
+			this.acceptedBaselines.set(uri, file.toCheckpoint)
+		}
 	}
 
 	/**
 	 * Reject a specific file change
 	 */
 	public async rejectChange(uri: string): Promise<void> {
-		this.rejectedFiles.add(uri)
-		this.acceptedFiles.delete(uri)
+		// Remove the file from current changeset - it will be reverted by FCOMessageHandler
+		// If file is edited again after reversion, it will reappear via updateFCOAfterEdit
+		this.changeset.files = this.changeset.files.filter((file) => file.uri !== uri)
 	}
 
 	/**
@@ -89,19 +81,18 @@ export class FileChangeManager {
 	 */
 	public async acceptAll(): Promise<void> {
 		this.changeset.files.forEach((file) => {
-			this.acceptedFiles.add(file.uri)
+			// Set baseline for each file
+			this.acceptedBaselines.set(file.uri, file.toCheckpoint)
 		})
-		this.rejectedFiles.clear()
 	}
 
 	/**
 	 * Reject all file changes
 	 */
 	public async rejectAll(): Promise<void> {
-		this.changeset.files.forEach((file) => {
-			this.rejectedFiles.add(file.uri)
-		})
-		this.acceptedFiles.clear()
+		// Clear all files from current changeset - they will be reverted by FCOMessageHandler
+		// If files are edited again after reversion, they will reappear via updateFCOAfterEdit
+		this.changeset.files = []
 	}
 
 	/**
@@ -121,10 +112,9 @@ export class FileChangeManager {
 		// The actual diff calculation should be handled by the checkpoint service
 		this.changeset.files = []
 
-		// Clear accepted/rejected state - baseline change means we're starting fresh
+		// Clear accepted baselines - baseline change means we're starting fresh
 		// This happens during checkpoint restore (time travel) where we want a clean slate
-		this.acceptedFiles.clear()
-		this.rejectedFiles.clear()
+		this.acceptedBaselines.clear()
 	}
 
 	/**
@@ -136,11 +126,91 @@ export class FileChangeManager {
 	}
 
 	/**
-	 * Clear accepted/rejected state (called when new checkpoint created)
+	 * Clear accepted baselines (called when new checkpoint created)
 	 */
-	public clearAcceptedRejectedState(): void {
-		this.acceptedFiles.clear()
-		this.rejectedFiles.clear()
+	public clearFileStates(): void {
+		this.acceptedBaselines.clear()
+	}
+
+	/**
+	 * Apply per-file baselines to a changeset for incremental diff calculation
+	 * For files that have been accepted, calculate diff from their acceptance point instead of global baseline
+	 */
+	public async applyPerFileBaselines(
+		baseChanges: FileChange[],
+		checkpointService: any,
+		currentCheckpoint: string,
+	): Promise<FileChange[]> {
+		const updatedChanges: FileChange[] = []
+
+		for (const change of baseChanges) {
+			// Get accepted baseline for this file (null = use global baseline)
+			const acceptedBaseline = this.acceptedBaselines.get(change.uri)
+
+			if (acceptedBaseline) {
+				// This file was accepted before - calculate incremental diff from acceptance point
+				try {
+					const incrementalChanges = await checkpointService.getDiff({
+						from: acceptedBaseline,
+						to: currentCheckpoint,
+					})
+
+					// Find this specific file in the incremental diff
+					const incrementalChange = incrementalChanges?.find((c: any) => c.paths.relative === change.uri)
+
+					if (incrementalChange) {
+						// Convert to FileChange with per-file baseline
+						const type = (
+							incrementalChange.paths.newFile
+								? "create"
+								: incrementalChange.paths.deletedFile
+									? "delete"
+									: "edit"
+						) as FileChangeType
+
+						let linesAdded = 0
+						let linesRemoved = 0
+
+						if (type === "create") {
+							linesAdded = incrementalChange.content.after
+								? incrementalChange.content.after.split("\n").length
+								: 0
+							linesRemoved = 0
+						} else if (type === "delete") {
+							linesAdded = 0
+							linesRemoved = incrementalChange.content.before
+								? incrementalChange.content.before.split("\n").length
+								: 0
+						} else {
+							const lineDifferences = FileChangeManager.calculateLineDifferences(
+								incrementalChange.content.before || "",
+								incrementalChange.content.after || "",
+							)
+							linesAdded = lineDifferences.linesAdded
+							linesRemoved = lineDifferences.linesRemoved
+						}
+
+						updatedChanges.push({
+							uri: change.uri,
+							type,
+							fromCheckpoint: acceptedBaseline, // Use per-file baseline
+							toCheckpoint: currentCheckpoint,
+							linesAdded,
+							linesRemoved,
+						})
+					}
+					// If no incremental change found, file hasn't changed since acceptance - don't include it
+				} catch (error) {
+					// If we can't calculate incremental diff, fall back to original change
+					updatedChanges.push(change)
+				}
+			} else {
+				// File was never accepted - use original change
+				updatedChanges.push(change)
+			}
+		}
+
+		return updatedChanges
 	}
 
 	/**
@@ -188,8 +258,7 @@ export class FileChangeManager {
 	 */
 	public dispose(): void {
 		this.changeset.files = []
-		this.acceptedFiles.clear()
-		this.rejectedFiles.clear()
+		this.acceptedBaselines.clear()
 	}
 }
 

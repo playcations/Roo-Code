@@ -72,8 +72,29 @@ export async function updateFCOAfterEdit(task: Task): Promise<void> {
 				}
 			})
 
-			// Update FileChangeManager with the new files
-			fileChangeManager.setFiles(fileChanges)
+			// Apply per-file baselines to show only incremental changes for accepted files
+			const updatedChanges = await fileChangeManager.applyPerFileBaselines(
+				fileChanges,
+				checkpointService,
+				"HEAD", // Current working directory state
+			)
+
+			// Get existing files and merge with new changes (maintaining existing files)
+			const existingFiles = fileChangeManager.getChanges().files
+			const updatedFiles = [...existingFiles]
+
+			// Update or add new files with per-file baseline changes
+			updatedChanges.forEach((newChange) => {
+				const existingIndex = updatedFiles.findIndex((existing) => existing.uri === newChange.uri)
+				if (existingIndex >= 0) {
+					updatedFiles[existingIndex] = newChange // Update existing
+				} else {
+					updatedFiles.push(newChange) // Add new
+				}
+			})
+
+			// Update FileChangeManager with merged files
+			fileChangeManager.setFiles(updatedFiles)
 
 			// Get LLM-only changes for the webview (filters out accepted/rejected files)
 			const filteredChangeset = await fileChangeManager.getLLMOnlyChanges(task.taskId, task.fileContextTracker)
