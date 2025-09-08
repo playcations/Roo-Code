@@ -200,6 +200,8 @@ const getLfsPatterns = async (workspacePath: string) => {
 
 export const getExcludePatterns = async (workspacePath: string) => [
 	".git/",
+	"**/.git/",
+	".roo/",
 	...getBuildArtifactPatterns(),
 	...getMediaFilePatterns(),
 	...getCacheFilePatterns(),

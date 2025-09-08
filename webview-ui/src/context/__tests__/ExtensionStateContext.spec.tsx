@@ -1,6 +1,7 @@
 import { render, screen, act } from "@/utils/test-utils"
 
 import { ProviderSettings, ExperimentId } from "@roo-code/types"
+import { experimentDefault } from "@roo/experiments"
 
 import { ExtensionState } from "@roo/ExtensionMessage"
 
@@ -192,7 +193,7 @@ describe("mergeExtensionState", () => {
 			writeDelayMs: 1000,
 			requestDelaySeconds: 5,
 			mode: "default",
-			experiments: {} as Record<ExperimentId, boolean>,
+			experiments: experimentDefault,
 			customModes: [],
 			maxOpenTabsContext: 20,
 			maxWorkspaceFiles: 100,
@@ -216,7 +217,7 @@ describe("mergeExtensionState", () => {
 		const prevState: ExtensionState = {
 			...baseState,
 			apiConfiguration: { modelMaxTokens: 1234, modelMaxThinkingTokens: 123 },
-			experiments: {} as Record<ExperimentId, boolean>,
+			experiments: experimentDefault,
 		}
 
 		const newState: ExtensionState = {
@@ -232,6 +233,7 @@ describe("mergeExtensionState", () => {
 				newTaskRequireTodos: false,
 				imageGeneration: false,
 				runSlashCommand: false,
+				filesChangedOverview: false,
 			} as Record<ExperimentId, boolean>,
 		}
 
@@ -252,6 +254,7 @@ describe("mergeExtensionState", () => {
 			newTaskRequireTodos: false,
 			imageGeneration: false,
 			runSlashCommand: false,
+			filesChangedOverview: false,
 		})
 	})
 })

@@ -51,6 +51,7 @@ describe("Checkpoint functionality", () => {
 			getDiff: vi.fn().mockResolvedValue([]),
 			on: vi.fn(),
 			initShadowGit: vi.fn().mockResolvedValue(undefined),
+			getCurrentCheckpoint: vi.fn().mockReturnValue("base-hash"),
 		}
 
 		// Create mock provider
@@ -111,7 +112,7 @@ describe("Checkpoint functionality", () => {
 			// saveCheckpoint should have been called
 			expect(mockCheckpointService.saveCheckpoint).toHaveBeenCalledWith(
 				expect.stringContaining("Task: test-task-id"),
-				{ allowEmpty: true, suppressMessage: false },
+				{ allowEmpty: true, files: undefined },
 			)
 
 			// Result should contain the commit hash
@@ -329,7 +330,7 @@ describe("Checkpoint functionality", () => {
 			})
 			expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
 				"vscode.changes",
-				"Changes compare with next checkpoint",
+				"Changes since previous checkpoint",
 				expect.any(Array),
 			)
 		})

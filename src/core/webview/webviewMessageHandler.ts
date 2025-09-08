@@ -32,7 +32,7 @@ import {
 	checkoutRestorePayloadSchema,
 } from "../../shared/WebviewMessage"
 import { checkExistKey } from "../../shared/checkExistApiConfig"
-import { experimentDefault } from "../../shared/experiments"
+import { experimentDefault, EXPERIMENT_IDS } from "../../shared/experiments"
 import { Terminal } from "../../integrations/terminal/Terminal"
 import { openFile } from "../../integrations/misc/open-file"
 import { openImage, saveImage } from "../../integrations/misc/image-handler"
@@ -1872,12 +1872,58 @@ export const webviewMessageHandler = async (
 				break
 			}
 
+			const prevExperiments = (getGlobalState("experiments") ?? experimentDefault) as Record<string, boolean>
 			const updatedExperiments = {
-				...(getGlobalState("experiments") ?? experimentDefault),
+				...prevExperiments,
 				...message.values,
 			}
 
 			await updateGlobalState("experiments", updatedExperiments)
+
+			// Detect transition of Files Changed Overview from disabled -> enabled
+			try {
+				const prev = !!prevExperiments[EXPERIMENT_IDS.FILES_CHANGED_OVERVIEW]
+				const next = !!updatedExperiments[EXPERIMENT_IDS.FILES_CHANGED_OVERVIEW]
+				if (!prev && next) {
+					// Replicate baseline reset behavior when enabling mid-task
+					const currentTask = provider.getCurrentTask()
+					if (currentTask && currentTask.taskId) {
+						let currentCheckpoint = currentTask.checkpointService?.getCurrentCheckpoint()
+						if (!currentCheckpoint || currentCheckpoint === "HEAD") {
+							const { checkpointSave } = await import("../checkpoints")
+							const checkpointResult = await checkpointSave(currentTask, true)
+							if (checkpointResult && checkpointResult.commit) {
+								currentCheckpoint = checkpointResult.commit
+							}
+						}
+
+						if (currentCheckpoint && currentCheckpoint !== "HEAD") {
+							let fileChangeManager = provider.getFileChangeManager()
+							if (!fileChangeManager) {
+								fileChangeManager = await provider.ensureFileChangeManager()
+							}
+
+							if (fileChangeManager) {
+								await fileChangeManager.updateBaseline(currentCheckpoint)
+								fileChangeManager.setFiles([])
+								if (currentTask.taskId && currentTask.fileContextTracker) {
+									const filteredChangeset = await fileChangeManager.getLLMOnlyChanges(
+										currentTask.taskId,
+										currentTask.fileContextTracker,
+									)
+									await provider.postMessageToWebview({
+										type: "filesChanged",
+										filesChanged:
+											filteredChangeset.files.length > 0 ? filteredChangeset : undefined,
+									})
+								}
+							}
+						}
+					}
+				}
+			} catch (err) {
+				provider.log(`[webviewMessageHandler] Error handling filesChangedOverview enable: ${err}`)
+			}
 
 			await provider.postStateToWebview()
 			break

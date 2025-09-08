@@ -37,6 +37,7 @@ import { Task } from "../task/Task"
 import { codebaseSearchTool } from "../tools/codebaseSearchTool"
 import { experiments, EXPERIMENT_IDS } from "../../shared/experiments"
 import { applyDiffToolLegacy } from "../tools/applyDiffTool"
+// Live FCO updates removed: FCO now updates on checkpoint events only
 
 /**
  * Processes and presents assistant message content to the user interface.

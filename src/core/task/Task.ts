@@ -268,6 +268,7 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	enableCheckpoints: boolean
 	checkpointService?: RepoPerTaskCheckpointService
 	checkpointServiceInitializing = false
+	ongoingCheckpointSaves?: Set<string>
 
 	// Task Bridge
 	enableBridge: boolean
@@ -892,9 +893,9 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 		// Create a checkpoint whenever the user sends a message.
 		// Use allowEmpty=true to ensure a checkpoint is recorded even if there are no file changes.
-		// Suppress the checkpoint_saved chat row for this particular checkpoint to keep the timeline clean.
+		// Checkpoint feed entries are posted via the checkpointCreated event.
 		if (askResponse === "messageResponse") {
-			void this.checkpointSave(false, true)
+			void this.checkpointSave(true)
 		}
 
 		// Mark the last follow-up question as answered
@@ -2781,8 +2782,8 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 
 	// Checkpoints
 
-	public async checkpointSave(force: boolean = false, suppressMessage: boolean = false) {
-		return checkpointSave(this, force, suppressMessage)
+	public async checkpointSave(force: boolean = false, files?: import("vscode").Uri[]) {
+		return checkpointSave(this, force, files)
 	}
 
 	public async checkpointRestore(options: CheckpointRestoreOptions) {
