@@ -188,6 +188,7 @@ export interface WebviewMessage {
 		| "cloudButtonClicked"
 		| "rooCloudSignIn"
 		| "rooCloudSignOut"
+		| "rooCloudManualUrl"
 		| "condenseTaskContextRequest"
 		| "requestIndexingStatus"
 		| "startIndexing"
