@@ -52,15 +52,20 @@ export class FileChangeManager {
 				.map((entry) => entry.path),
 		)
 
-		// Filter changeset to only include LLM-modified files that haven't been accepted
+		// Filter changeset to only include LLM-modified files that haven't been accepted/rejected
 		const filteredFiles = this.changeset.files.filter((file) => {
 			if (!llmModifiedFiles.has(file.uri)) {
 				return false
 			}
 			const baseline = this.acceptedBaselines.get(file.uri)
-			// File is "not accepted" if baseline equals fromCheckpoint (initial baseline)
-			// File is "accepted" if baseline equals toCheckpoint (updated baseline)
-			return baseline === file.fromCheckpoint
+
+			// If no baseline is set, file should appear (this shouldn't normally happen due to setFiles logic)
+			if (!baseline) {
+				return true
+			}
+
+			// File should appear if it has changes from its baseline
+			return file.toCheckpoint !== baseline
 		})
 
 		return {
