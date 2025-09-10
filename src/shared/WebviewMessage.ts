@@ -50,6 +50,14 @@ export interface WebviewMessage {
 		| "alwaysAllowUpdateTodoList"
 		| "followupAutoApproveTimeoutMs"
 		| "webviewDidLaunch"
+		| "webviewReady"
+		| "filesChangedRequest"
+		| "filesChangedBaselineUpdate"
+		| "viewDiff"
+		| "acceptFileChange"
+		| "rejectFileChange"
+		| "acceptAllFileChanges"
+		| "rejectAllFileChanges"
 		| "newTask"
 		| "askResponse"
 		| "terminalOperation"
@@ -228,6 +236,8 @@ export interface WebviewMessage {
 	disabled?: boolean
 	context?: string
 	dataUri?: string
+	uri?: string
+	uris?: string[]
 	askResponse?: ClineAskResponse
 	apiConfiguration?: ProviderSettings
 	images?: string[]
@@ -267,6 +277,8 @@ export interface WebviewMessage {
 	visibility?: ShareVisibility // For share visibility
 	hasContent?: boolean // For checkRulesDirectoryResult
 	checkOnly?: boolean // For deleteCustomMode check
+	fileChanges?: any[] // For filesChanged message
+	baseline?: string // For filesChangedBaselineUpdate
 	codeIndexSettings?: {
 		// Global state settings
 		codebaseIndexEnabled: boolean
