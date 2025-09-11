@@ -750,7 +750,7 @@
 		},
 		"FILES_CHANGED_OVERVIEW": {
 			"name": "Włącz przegląd zmienionych plików",
-			"description": "Po włączeniu wyświetla panel pokazujący pliki, które zostały zmodyfikowane między punktami kontrolnymi.\nUmożliwia to przeglądanie różnic i akceptowanie/odrzucanie poszczególnych zmian."
+			"description": "Po włączeniu wyświetla panel pokazujący pliki, które zostały zmodyfikowane między punktami kontrolnymi.\nUmożliwia to przeglądanie różnic i akceptowanie/odrzucanie poszczególnych zmian. Wymaga włączonych punktów kontrolnych."
 		}
 	},
 	"promptCaching": {

@@ -750,7 +750,7 @@
 		},
 		"FILES_CHANGED_OVERVIEW": {
 			"name": "Abilita la panoramica dei file modificati",
-			"description": "Se abilitato, visualizza un pannello che mostra i file modificati tra i checkpoint.\nCiò consente di visualizzare le differenze e accettare/rifiutare le singole modifiche."
+			"description": "Se abilitato, visualizza un pannello che mostra i file modificati tra i checkpoint.\nCiò consente di visualizzare le differenze e accettare/rifiutare le singole modifiche. Richiede i checkpoint abilitati."
 		}
 	},
 	"promptCaching": {

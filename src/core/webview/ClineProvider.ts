@@ -592,6 +592,9 @@ export class ClineProvider
 		this.log("Disposed all disposables")
 		ClineProvider.activeInstances.delete(this)
 
+		// Ensure FCO checkpoint listeners are cleaned up
+		this.fcoMessageHandler?.cleanup()
+
 		// Clean up any event listeners attached to this provider
 		this.removeAllListeners()
 

@@ -16,10 +16,16 @@ describe("FileChangeManager (Simplified)", () => {
 
 	afterEach(() => {
 		fileChangeManager.dispose()
+		// Ensure any spies/mocks created within tests are restored
+		// to avoid cross-test interference.
+		try {
+			vi.restoreAllMocks()
+			vi.clearAllMocks()
+		} catch {}
 	})
 
 	describe("validateState pruning", () => {
-		it("drops per-file baseline equal to global baseline and prunes unknown files", () => {
+		it("drops per-file baseline equal to global baseline and preserves absent files", () => {
 			// Global baseline is initial-checkpoint (from beforeEach)
 			const file: FileChange = {
 				uri: "same-as-global.txt",
@@ -35,11 +41,12 @@ describe("FileChangeManager (Simplified)", () => {
 			const baselineAfterSet = (fileChangeManager as any)["acceptedBaselines"].get("same-as-global.txt")
 			expect(baselineAfterSet).toBeUndefined()
 
-			// Now add other file and remove the first; map should prune unknown file baselines
+			// Now add other file and remove the first; per-file baselines for
+			// absent files should be preserved (no presence-based pruning)
 			const other: FileChange = { ...file, uri: "other.txt", fromCheckpoint: "zzz" }
 			;(fileChangeManager as any)["acceptedBaselines"].set("same-as-global.txt", "something")
 			fileChangeManager.setFiles([other])
-			expect((fileChangeManager as any)["acceptedBaselines"].has("same-as-global.txt")).toBe(false)
+			expect((fileChangeManager as any)["acceptedBaselines"].has("same-as-global.txt")).toBe(true)
 		})
 	})
 
@@ -681,6 +688,58 @@ describe("FileChangeManager (Simplified)", () => {
 				)
 
 				// File with no incremental changes shouldn't appear
+				expect(result).toHaveLength(0)
+			})
+
+			it("should preserve accepted baseline across checkpoints when file is absent", async () => {
+				// Initial change and acceptance
+				const initial: FileChange = {
+					uri: "preserve.txt",
+					type: "edit",
+					fromCheckpoint: "baseline",
+					toCheckpoint: "checkpoint1",
+					linesAdded: 2,
+					linesRemoved: 0,
+				}
+
+				fileChangeManager.setFiles([initial])
+				await fileChangeManager.acceptChange("preserve.txt")
+
+				// Next checkpoint diff does not include the accepted file
+				const other: FileChange = {
+					uri: "other.txt",
+					type: "edit",
+					fromCheckpoint: "baseline",
+					toCheckpoint: "checkpoint1",
+					linesAdded: 1,
+					linesRemoved: 0,
+				}
+				fileChangeManager.setFiles([other])
+
+				// Ensure the accepted baseline is still remembered even though the file was absent
+				const acceptedBaselines: Map<string, string> = (fileChangeManager as any)["acceptedBaselines"]
+				expect(acceptedBaselines.get("preserve.txt")).toBe("checkpoint1")
+
+				// Now a later checkpoint includes the file again, but no incremental changes since acceptance
+				mockCheckpointService.getDiff.mockResolvedValue([])
+
+				const cumulativeChange: FileChange = {
+					uri: "preserve.txt",
+					type: "edit",
+					fromCheckpoint: "baseline",
+					toCheckpoint: "checkpoint2",
+					linesAdded: 10, // Cumulative from baseline, but should be ignored
+					linesRemoved: 0,
+				}
+
+				const result = await fileChangeManager.applyPerFileBaselines(
+					[cumulativeChange],
+					mockCheckpointService,
+					"checkpoint2",
+				)
+
+				// Because the accepted baseline was preserved, and there are no incremental changes,
+				// the file should not appear in the result.
 				expect(result).toHaveLength(0)
 			})
 

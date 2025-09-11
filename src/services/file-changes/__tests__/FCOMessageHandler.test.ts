@@ -211,7 +211,9 @@ describe("FCOMessageHandler", () => {
 		})
 	})
 	afterEach(() => {
+		// Restore and clear all spies/mocks to avoid bleed between tests
 		vi.restoreAllMocks()
+		vi.clearAllMocks()
 	})
 
 	describe("handleExperimentToggle", () => {
@@ -542,6 +544,15 @@ describe("FCOMessageHandler", () => {
 			})
 		})
 
+		it("should advance baseline when list becomes empty after accepts", async () => {
+			mockFileChangeManager.getLLMOnlyChanges.mockResolvedValue({ baseCheckpoint: "base123", files: [] })
+			mockCheckpointService.getCurrentCheckpoint.mockReturnValue("cp-latest")
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("cp-latest")
+		})
+
 		it("should handle missing FileChangeManager", async () => {
 			mockProvider.getFileChangeManager.mockReturnValue(null)
 
@@ -587,6 +598,15 @@ describe("FCOMessageHandler", () => {
 				type: "filesChanged",
 				filesChanged: undefined,
 			})
+		})
+
+		it("should advance baseline when list becomes empty after rejections", async () => {
+			mockFileChangeManager.getLLMOnlyChanges.mockResolvedValue({ baseCheckpoint: "base123", files: [] })
+			mockCheckpointService.getCurrentCheckpoint.mockReturnValue("cp-now")
+
+			await handler.handleMessage(mockMessage)
+
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("cp-now")
 		})
 
 		it("should handle newly created files by falling back to removal when restore fails", async () => {

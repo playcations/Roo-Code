@@ -749,7 +749,7 @@
 		},
 		"FILES_CHANGED_OVERVIEW": {
 			"name": "Übersicht über geänderte Dateien aktivieren",
-			"description": "Wenn aktiviert, wird ein Panel angezeigt, das die zwischen den Prüfpunkten geänderten Dateien anzeigt. Dies ermöglicht es dir, Diffs anzuzeigen und einzelne Änderungen zu akzeptieren/abzulehnen."
+			"description": "Wenn aktiviert, wird ein Panel angezeigt, das die zwischen den Prüfpunkten geänderten Dateien anzeigt. Dies ermöglicht es dir, Diffs anzuzeigen und einzelne Änderungen zu akzeptieren/abzulehnen. Erfordert aktivierte Prüfpunkte."
 		}
 	},
 	"promptCaching": {

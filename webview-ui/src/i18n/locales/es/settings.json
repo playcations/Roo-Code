@@ -749,7 +749,7 @@
 		},
 		"FILES_CHANGED_OVERVIEW": {
 			"name": "Habilitar la vista general de archivos modificados",
-			"description": "Cuando está habilitado, muestra un panel que indica los archivos que se han modificado entre los puntos de control.\nEsto le permite ver las diferencias y aceptar/rechazar cambios individuales."
+			"description": "Cuando está habilitado, muestra un panel que indica los archivos que se han modificado entre los puntos de control.\nEsto le permite ver las diferencias y aceptar/rechazar cambios individuales. Requiere puntos de control habilitados."
 		}
 	},
 	"promptCaching": {

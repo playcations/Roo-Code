@@ -1,5 +1,6 @@
 import { FileChange, FileChangeset, FileChangeType } from "@roo-code/types"
 import type { FileContextTracker } from "../../core/context-tracking/FileContextTracker"
+import type { ShadowCheckpointService } from "../checkpoints/ShadowCheckpointService"
 
 /**
  * Simplified FileChangeManager - Pure diff calculation service
@@ -157,22 +158,15 @@ export class FileChangeManager {
 	 * Preserves existing accept/reject state for files with the same URI
 	 */
 	public setFiles(files: FileChange[]): void {
-		files.forEach((file) => {
-			// For new files (not yet in changeset), assign initial baseline
-			if (!this.acceptedBaselines.has(file.uri)) {
-				// Use fromCheckpoint as initial baseline (the state file started from)
-				console.log(`[DEBUG] Setting baseline for ${file.uri}: ${file.fromCheckpoint}`)
-				this.acceptedBaselines.set(file.uri, file.fromCheckpoint)
-			}
-		})
+		// Do not set per-file baselines here. Baselines are created only when
+		// a user explicitly accepts a file. This ensures rejected or never-
+		// accepted files are compared against the global baseline.
 
-		// Prune accepted baselines for files no longer present
-		const uris = new Set(files.map((f) => f.uri))
-		for (const key of Array.from(this.acceptedBaselines.keys())) {
-			if (!uris.has(key)) {
-				this.acceptedBaselines.delete(key)
-			}
-		}
+		// Important: Do NOT prune per-file baselines when a file is absent
+		// from the current diff. Accepted baselines must persist across
+		// checkpoints so previously accepted files remain suppressed until
+		// they change again or the global baseline is reset. Stale baselines
+		// are pruned in validateState when equal to the global baseline.
 
 		this.changeset.files = files
 		this.validateState()
@@ -191,7 +185,7 @@ export class FileChangeManager {
 	 */
 	public async applyPerFileBaselines(
 		baseChanges: FileChange[],
-		checkpointService: any,
+		checkpointService: Pick<ShadowCheckpointService, "getDiff">,
 		currentCheckpoint: string,
 	): Promise<FileChange[]> {
 		this.validateState()
@@ -214,27 +208,26 @@ export class FileChangeManager {
 
 					if (incrementalChange) {
 						// Convert to FileChange with per-file baseline
-						const type = (
-							incrementalChange.paths.newFile
-								? "create"
-								: incrementalChange.paths.deletedFile
-									? "delete"
-									: "edit"
-						) as FileChangeType
+						let type: FileChangeType
+						const before = incrementalChange.content.before || ""
+						const after = incrementalChange.content.after || ""
+						if (before === "" && after !== "") {
+							type = "create"
+						} else if (before !== "" && after === "") {
+							type = "delete"
+						} else {
+							type = "edit"
+						}
 
 						let linesAdded = 0
 						let linesRemoved = 0
 
 						if (type === "create") {
-							linesAdded = incrementalChange.content.after
-								? incrementalChange.content.after.split("\n").length
-								: 0
+							linesAdded = after ? after.split("\n").length : 0
 							linesRemoved = 0
 						} else if (type === "delete") {
 							linesAdded = 0
-							linesRemoved = incrementalChange.content.before
-								? incrementalChange.content.before.split("\n").length
-								: 0
+							linesRemoved = before ? before.split("\n").length : 0
 						} else {
 							const lineDifferences = FileChangeManager.calculateLineDifferences(
 								incrementalChange.content.before || "",
@@ -278,14 +271,10 @@ export class FileChangeManager {
 				this.acceptedBaselines.delete(uri)
 			}
 		}
-
-		// Ensure accepted map only contains files that are currently tracked
-		const currentUris = new Set(this.changeset.files.map((f) => f.uri))
-		for (const key of Array.from(this.acceptedBaselines.keys())) {
-			if (!currentUris.has(key)) {
-				this.acceptedBaselines.delete(key)
-			}
-		}
+		// Do not prune per-file baselines simply because a file is
+		// not in the current diff. Persisting these ensures accepted
+		// files remain suppressed across subsequent checkpoints until
+		// the file changes again or the global baseline is reset.
 	}
 
 	/**

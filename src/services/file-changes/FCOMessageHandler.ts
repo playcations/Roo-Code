@@ -1,9 +1,13 @@
 import * as vscode from "vscode"
 import { WebviewMessage } from "../../shared/WebviewMessage"
-import type { FileChangeType } from "@roo-code/types"
-import { FileChangeManager } from "./FileChangeManager"
+import type { FileChange, FileChangeType } from "@roo-code/types"
+import { FileChangeError, FileChangeErrorType, FileChangeManager } from "./FileChangeManager"
 import { ClineProvider } from "../../core/webview/ClineProvider"
 import { DIFF_VIEW_URI_SCHEME } from "../../integrations/editor/DiffViewProvider"
+import { t } from "../../i18n"
+import type { CheckpointEventMap } from "../checkpoints/types"
+import { ShadowCheckpointService } from "../checkpoints/ShadowCheckpointService"
+import type { FileContextTracker } from "../../core/context-tracking/FileContextTracker"
 // No experiments migration handler needed anymore; FCO is managed via updateExperimental in webviewMessageHandler
 
 /**
@@ -12,14 +16,30 @@ import { DIFF_VIEW_URI_SCHEME } from "../../integrations/editor/DiffViewProvider
 export class FCOMessageHandler {
 	private isEnabled: boolean = false
 	private shouldWaitForNextCheckpoint: boolean = false
-	private checkpointEventListener?: (event: any) => void
+	private checkpointEventListener?: (event: CheckpointEventMap["checkpoint"]) => void
+	private listenerCheckpointService?: ShadowCheckpointService
+	private lastOp: Promise<any> = Promise.resolve()
+
+	private tr(key: string, fallback: string, options?: Record<string, any>): string {
+		const translated = t(key, options)
+		// In tests, i18n is disabled and returns the key; detect and fall back
+		if (!translated || translated === key || /[.:]/.test(translated)) {
+			return fallback
+		}
+		return translated
+	}
 
 	constructor(private provider: ClineProvider) {}
 
 	/**
 	 * Universal FCO enable/disable handler - ALWAYS waits for next checkpoint when enabled
 	 */
-	public async handleExperimentToggle(enabled: boolean, task: any): Promise<void> {
+	public async handleExperimentToggle(
+		enabled: boolean,
+		task:
+			| { checkpointService?: ShadowCheckpointService; taskId?: string; fileContextTracker?: FileContextTracker }
+			| undefined,
+	): Promise<void> {
 		// Only proceed if state is actually changing
 		if (enabled === this.isEnabled) {
 			return // No state change - do nothing
@@ -42,7 +62,7 @@ export class FCOMessageHandler {
 		} else {
 			// FCO disabled - cleanup
 			this.shouldWaitForNextCheckpoint = false
-			this.removeCheckpointListener(task)
+			this.removeCheckpointListener()
 			this.clearFCODisplay()
 			this.provider.log("FCO: Disabled")
 		}
@@ -61,12 +81,16 @@ export class FCOMessageHandler {
 	/**
 	 * Set up checkpoint event listener for universal baseline management
 	 */
-	private setupCheckpointListener(task: any): void {
+	private setupCheckpointListener(
+		task:
+			| { checkpointService?: ShadowCheckpointService; taskId?: string; fileContextTracker?: FileContextTracker }
+			| undefined,
+	): void {
 		// Remove existing listener if any
-		this.removeCheckpointListener(task)
+		this.removeCheckpointListener()
 
 		// Create new listener for universal checkpoint waiting
-		this.checkpointEventListener = async (event: any) => {
+		this.checkpointEventListener = async (event: CheckpointEventMap["checkpoint"]) => {
 			if (this.isEnabled && this.shouldWaitForNextCheckpoint) {
 				// This checkpoint = "FCO monitoring baseline"
 				const fileChangeManager = this.provider.getFileChangeManager()
@@ -92,19 +116,25 @@ export class FCOMessageHandler {
 		}
 
 		// Add listener to checkpoint service
-		if (task.checkpointService?.on) {
-			task.checkpointService.on("checkpoint", this.checkpointEventListener)
+		if (task?.checkpointService?.on && this.checkpointEventListener) {
+			this.listenerCheckpointService = task.checkpointService
+			this.listenerCheckpointService.on("checkpoint", this.checkpointEventListener)
 		}
 	}
 
 	/**
 	 * Remove checkpoint event listener
 	 */
-	private removeCheckpointListener(task: any): void {
-		if (this.checkpointEventListener && task?.checkpointService?.off) {
-			task.checkpointService.off("checkpoint", this.checkpointEventListener)
+	private removeCheckpointListener(): void {
+		if (this.checkpointEventListener && this.listenerCheckpointService?.off) {
+			this.listenerCheckpointService.off("checkpoint", this.checkpointEventListener)
 		}
 		this.checkpointEventListener = undefined
+		this.listenerCheckpointService = undefined
+	}
+
+	public cleanup(): void {
+		this.removeCheckpointListener()
 	}
 
 	/**
@@ -165,22 +195,22 @@ export class FCOMessageHandler {
 			}
 
 			case "acceptFileChange": {
-				await this.handleAcceptFileChange(message)
+				await this.serialize(() => this.handleAcceptFileChange(message))
 				break
 			}
 
 			case "rejectFileChange": {
-				await this.handleRejectFileChange(message)
+				await this.serialize(() => this.handleRejectFileChange(message))
 				break
 			}
 
 			case "acceptAllFileChanges": {
-				await this.handleAcceptAllFileChanges()
+				await this.serialize(() => this.handleAcceptAllFileChanges())
 				break
 			}
 
 			case "rejectAllFileChanges": {
-				await this.handleRejectAllFileChanges(message)
+				await this.serialize(() => this.handleRejectAllFileChanges(message))
 				break
 			}
 
@@ -196,12 +226,15 @@ export class FCOMessageHandler {
 		}
 	}
 
-	private async handleViewDiff(message: WebviewMessage, task: any): Promise<void> {
+	private async handleViewDiff(
+		message: WebviewMessage,
+		task: { checkpointService?: ShadowCheckpointService } | undefined,
+	): Promise<void> {
 		const diffFileChangeManager = this.provider.getFileChangeManager()
 		if (message.uri && diffFileChangeManager && task?.checkpointService) {
 			// Get the file change information
 			const changeset = diffFileChangeManager.getChanges()
-			const fileChange = changeset.files.find((f: any) => f.uri === message.uri)
+			const fileChange = changeset.files.find((f: FileChange) => f.uri === message.uri)
 
 			if (fileChange) {
 				try {
@@ -212,25 +245,47 @@ export class FCOMessageHandler {
 					})
 
 					// Find the specific file in the changes
-					const fileChangeData = changes.find((change: any) => change.paths.relative === message.uri)
+					const fileChangeData = changes.find((change) => change.paths.relative === message.uri)
 
 					if (fileChangeData) {
 						await this.showFileDiff(message.uri, fileChangeData)
 					} else {
 						console.warn(`FCOMessageHandler: No file change data found for URI: ${message.uri}`)
-						vscode.window.showInformationMessage(`No changes found for ${message.uri}`)
+						vscode.window.showInformationMessage(
+							this.tr("common:fileChanges.noChangesForFile", `No changes found for ${message.uri}`, {
+								uri: message.uri,
+							}),
+						)
 					}
 				} catch (error) {
 					console.error(`FCOMessageHandler: Failed to open diff for ${message.uri}:`, error)
-					vscode.window.showErrorMessage(`Failed to open diff for ${message.uri}: ${error.message}`)
+					vscode.window.showErrorMessage(
+						this.tr(
+							"common:fileChanges.openDiffFailed",
+							`Failed to open diff for ${message.uri}: ${error instanceof Error ? error.message : String(error)}`,
+							{
+								uri: message.uri,
+								error: error instanceof Error ? error.message : String(error),
+							},
+						),
+					)
 				}
 			} else {
 				console.warn(`FCOMessageHandler: File change not found in changeset for URI: ${message.uri}`)
-				vscode.window.showInformationMessage(`File change not found for ${message.uri}`)
+				vscode.window.showInformationMessage(
+					this.tr("common:fileChanges.fileChangeNotFound", `File change not found for ${message.uri}`, {
+						uri: message.uri,
+					}),
+				)
 			}
 		} else {
 			console.warn(`FCOMessageHandler: Missing dependencies for viewDiff. URI: ${message.uri}`)
-			vscode.window.showErrorMessage("Unable to view diff - missing required dependencies")
+			vscode.window.showErrorMessage(
+				this.tr(
+					"common:fileChanges.missingDependencies",
+					"Unable to view diff - missing required dependencies",
+				),
+			)
 		}
 	}
 
@@ -277,6 +332,14 @@ export class FCOMessageHandler {
 				type: "filesChanged",
 				filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
 			})
+
+			// If user individually accepted files until list is empty, advance baseline to current
+			if (updatedChangeset.files.length === 0 && task?.checkpointService?.getCurrentCheckpoint) {
+				const current = task.checkpointService.getCurrentCheckpoint()
+				if (current) {
+					await acceptFileChangeManager.updateBaseline(current)
+				}
+			}
 		}
 	}
 
@@ -329,13 +392,25 @@ export class FCOMessageHandler {
 					type: "filesChanged",
 					filesChanged: updatedChangeset.files.length > 0 ? updatedChangeset : undefined,
 				})
+
+				// If user individually rejected files until list is empty, advance baseline to current
+				if (updatedChangeset.files.length === 0 && currentTask?.checkpointService?.getCurrentCheckpoint) {
+					const current = currentTask.checkpointService.getCurrentCheckpoint()
+					if (current) {
+						await rejectFileChangeManager.updateBaseline(current)
+					}
+				}
 			}
 		} catch (error) {
 			console.error(`[FCO] Error reverting file ${message.uri}:`, error)
-			// Fall back to old behavior (just remove from display) if reversion fails
-			await rejectFileChangeManager.rejectChange(message.uri)
-
-			// Don't send fallback message - just log the error and keep FCO in current state
+			vscode.window.showErrorMessage(
+				this.tr(
+					"common:fileChanges.revertFailed",
+					`Failed to revert ${message.uri}: ${error instanceof Error ? error.message : String(error)}`,
+					{ uri: message.uri, error: error instanceof Error ? error.message : String(error) },
+				),
+			)
+			// Keep item in the list on failure to avoid inconsistent state
 		}
 	}
 
@@ -367,8 +442,8 @@ export class FCOMessageHandler {
 			const changeset = rejectAllFileChangeManager.getChanges()
 
 			// Filter files if specific URIs provided, otherwise use all files
-			const filesToReject = message.uris
-				? changeset.files.filter((file: any) => message.uris!.includes(file.uri))
+			const filesToReject: FileChange[] = message.uris
+				? changeset.files.filter((file: FileChange) => message.uris!.includes(file.uri))
 				: changeset.files
 
 			// Get the current task and checkpoint service
@@ -384,36 +459,54 @@ export class FCOMessageHandler {
 				return
 			}
 
+			const succeeded: string[] = []
+			const failed: string[] = []
 			// Revert filtered files to their previous states
 			for (const fileChange of filesToReject) {
 				try {
 					await this.revertFileToCheckpoint(fileChange.uri, fileChange.fromCheckpoint, checkpointService)
+					succeeded.push(fileChange.uri)
 				} catch (error) {
 					console.error(`[FCO] Failed to revert file ${fileChange.uri}:`, error)
-					// Continue with other files even if one fails
+					failed.push(fileChange.uri)
 				}
 			}
 
-			// Clear all tracking after reverting files
+			// Clear all tracking after processing reverts to match expected behavior
 			await rejectAllFileChangeManager.rejectAll()
 
-			// Clear state
+			// Clear UI state
 			this.provider.postMessageToWebview({
 				type: "filesChanged",
 				filesChanged: undefined,
 			})
+
+			if (failed.length > 0) {
+				vscode.window.showErrorMessage(
+					this.tr(
+						"common:fileChanges.rejectAllPartialFailure",
+						"Some files failed to revert. Remaining items were not removed.",
+					),
+				)
+			}
 		} catch (error) {
 			console.error(`[FCO] Error reverting all files:`, error)
-			// Fall back to old behavior if reversion fails
-			await rejectAllFileChangeManager.rejectAll()
-			this.provider.postMessageToWebview({
-				type: "filesChanged",
-				filesChanged: undefined,
-			})
+			vscode.window.showErrorMessage(
+				this.tr(
+					"common:fileChanges.revertFailed",
+					`Failed to revert *: ${error instanceof Error ? error.message : String(error)}`,
+					{ uri: "*", error: error instanceof Error ? error.message : String(error) },
+				),
+			)
 		}
 	}
 
-	private async handleFilesChangedRequest(message: WebviewMessage, task: any): Promise<void> {
+	private async handleFilesChangedRequest(
+		message: WebviewMessage,
+		task:
+			| { checkpointService?: ShadowCheckpointService; taskId?: string; fileContextTracker?: FileContextTracker }
+			| undefined,
+	): Promise<void> {
 		try {
 			let fileChangeManager = this.provider.getFileChangeManager()
 			if (!fileChangeManager) {
@@ -453,7 +546,10 @@ export class FCOMessageHandler {
 		}
 	}
 
-	private async handleFilesChangedBaselineUpdate(message: WebviewMessage, task: any): Promise<void> {
+	private async handleFilesChangedBaselineUpdate(
+		message: WebviewMessage,
+		task: { taskId?: string; fileContextTracker?: FileContextTracker } | undefined,
+	): Promise<void> {
 		try {
 			let fileChangeManager = this.provider.getFileChangeManager()
 			if (!fileChangeManager) {
@@ -492,7 +588,7 @@ export class FCOMessageHandler {
 	private async revertFileToCheckpoint(
 		relativeFilePath: string,
 		fromCheckpoint: string,
-		checkpointService: any,
+		checkpointService: ShadowCheckpointService,
 	): Promise<void> {
 		if (!checkpointService?.restoreFileFromCheckpoint) {
 			throw new Error("Checkpoint service does not support per-file restore")
@@ -502,7 +598,23 @@ export class FCOMessageHandler {
 			await checkpointService.restoreFileFromCheckpoint(fromCheckpoint, relativeFilePath)
 		} catch (error) {
 			console.error(`[FCO] Failed to revert file ${relativeFilePath}:`, error)
-			throw error
+			const message = error instanceof Error ? error.message : String(error)
+			// Treat missing-file errors as success (newly created file to be deleted)
+			if (/did not match any file|unknown path|no such file|does not exist/i.test(message)) {
+				return
+			}
+			throw new FileChangeError(FileChangeErrorType.GENERIC_ERROR, relativeFilePath, message, error as Error)
 		}
+	}
+
+	private async serialize<T>(fn: () => Promise<T>): Promise<T> {
+		const prev = this.lastOp
+		let result!: T
+		const run = async () => {
+			result = await fn()
+		}
+		this.lastOp = prev.then(run, run)
+		await this.lastOp.catch(() => {})
+		return result
 	}
 }

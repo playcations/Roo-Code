@@ -748,7 +748,7 @@
 		},
 		"FILES_CHANGED_OVERVIEW": {
 			"name": "Enable Files Changed Overview",
-			"description": "When enabled, displays a panel showing files that have been modified between checkpoints. This allows you to view diffs and accept/reject individual changes."
+			"description": "When enabled, displays a panel showing files that have been modified between checkpoints. This allows you to view diffs and accept/reject individual changes. Requires checkpoints enabled."
 		}
 	},
 	"promptCaching": {
