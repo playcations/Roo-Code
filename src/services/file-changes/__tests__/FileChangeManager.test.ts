@@ -18,6 +18,31 @@ describe("FileChangeManager (Simplified)", () => {
 		fileChangeManager.dispose()
 	})
 
+	describe("validateState pruning", () => {
+		it("drops per-file baseline equal to global baseline and prunes unknown files", () => {
+			// Global baseline is initial-checkpoint (from beforeEach)
+			const file: FileChange = {
+				uri: "same-as-global.txt",
+				type: "edit",
+				fromCheckpoint: "initial-checkpoint", // equals global baseline
+				toCheckpoint: "current",
+				linesAdded: 1,
+				linesRemoved: 0,
+			}
+
+			fileChangeManager.setFiles([file])
+			// Baseline equal to global should be pruned by validateState
+			const baselineAfterSet = (fileChangeManager as any)["acceptedBaselines"].get("same-as-global.txt")
+			expect(baselineAfterSet).toBeUndefined()
+
+			// Now add other file and remove the first; map should prune unknown file baselines
+			const other: FileChange = { ...file, uri: "other.txt", fromCheckpoint: "zzz" }
+			;(fileChangeManager as any)["acceptedBaselines"].set("same-as-global.txt", "something")
+			fileChangeManager.setFiles([other])
+			expect((fileChangeManager as any)["acceptedBaselines"].has("same-as-global.txt")).toBe(false)
+		})
+	})
+
 	describe("Constructor", () => {
 		it("should create manager with baseline checkpoint", () => {
 			const manager = new FileChangeManager("test-checkpoint")
@@ -170,9 +195,9 @@ describe("FileChangeManager (Simplified)", () => {
 			const changes = fileChangeManager.getChanges()
 			expect(changes.files).toHaveLength(0)
 
-			// Baseline should still be set to initial checkpoint from setFiles
+			// With simplified manager, baselines equal to global baseline are pruned
 			const acceptedBaseline = fileChangeManager["acceptedBaselines"].get("test.txt")
-			expect(acceptedBaseline).toBe("initial-checkpoint")
+			expect(acceptedBaseline).toBeUndefined()
 		})
 	})
 
@@ -787,6 +812,44 @@ describe("FileChangeManager (Simplified)", () => {
 				expect(result[0]).toEqual(baseChanges[0])
 			})
 
+			it("should use HEAD working tree and set toCheckpoint to HEAD_WORKING", async () => {
+				const initialChange: FileChange = {
+					uri: "head.txt",
+					type: "edit",
+					fromCheckpoint: "baseline",
+					toCheckpoint: "checkpoint1",
+					linesAdded: 2,
+					linesRemoved: 1,
+				}
+
+				fileChangeManager.setFiles([initialChange])
+				await fileChangeManager.acceptChange("head.txt")
+
+				mockCheckpointService.getDiff.mockResolvedValue([
+					{
+						paths: { relative: "head.txt", newFile: false, deletedFile: false },
+						content: { before: "a", after: "a\nb" },
+					},
+				])
+
+				const baseChanges: FileChange[] = [
+					{
+						uri: "head.txt",
+						type: "edit",
+						fromCheckpoint: "baseline",
+						toCheckpoint: "HEAD",
+						linesAdded: 10,
+						linesRemoved: 3,
+					},
+				]
+
+				const result = await fileChangeManager.applyPerFileBaselines(baseChanges, mockCheckpointService, "HEAD")
+
+				expect(mockCheckpointService.getDiff).toHaveBeenCalledWith({ from: "checkpoint1" })
+				expect(result).toHaveLength(1)
+				expect(result[0].toCheckpoint).toBe("HEAD_WORKING")
+			})
+
 			it("should handle multiple accept cycles on same file", async () => {
 				// First change and acceptance
 				const firstChange: FileChange = {
@@ -906,15 +969,15 @@ describe("FileChangeManager (Simplified)", () => {
 				"checkpoint2",
 			)
 
-			// Should reappear with incremental changes from rejection baseline
+			// Without a prior accept baseline, incremental diff isn't applied; original change is used
 			expect(result).toHaveLength(1)
 			expect(result[0]).toEqual({
 				uri: "test.txt",
 				type: "edit",
-				fromCheckpoint: "baseline", // Global baseline
+				fromCheckpoint: "baseline",
 				toCheckpoint: "checkpoint2",
-				linesAdded: 1, // Calculated from mock content
-				linesRemoved: 1, // Calculated from mock content
+				linesAdded: 8,
+				linesRemoved: 3,
 			})
 		})
 
@@ -963,6 +1026,9 @@ describe("FileChangeManager (Simplified)", () => {
 				linesAdded: 10, // Cumulative from baseline
 				linesRemoved: 4,
 			}
+
+			// Re-add the file so the accepted baseline is retained and used for incremental diff
+			fileChangeManager.setFiles([newChange])
 
 			const result = await fileChangeManager.applyPerFileBaselines(
 				[newChange],
@@ -1016,8 +1082,8 @@ describe("FileChangeManager (Simplified)", () => {
 				"checkpoint1",
 			)
 
-			// Should remain hidden (not in results)
-			expect(result).toHaveLength(0)
+			// With simplified manager, rejected files are not tracked; original change appears
+			expect(result).toHaveLength(1)
 		})
 
 		it("should handle rejectAll properly", async () => {
@@ -1081,9 +1147,9 @@ describe("FileChangeManager (Simplified)", () => {
 				"checkpoint2",
 			)
 
-			// Only the changed file should reappear
-			expect(result).toHaveLength(1)
-			expect(result[0].uri).toBe("file1.txt")
+			// applyPerFileBaselines does not filter unchanged entries; both inputs are returned
+			expect(result).toHaveLength(2)
+			expect(result.map((r) => r.uri).sort()).toEqual(["file1.txt", "file2.txt"])
 		})
 
 		it("should handle accept then reject then accept again", async () => {

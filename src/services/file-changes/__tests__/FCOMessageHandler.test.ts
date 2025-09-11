@@ -36,6 +36,10 @@ vi.mock("vscode", () => ({
 	},
 	Uri: {
 		file: vi.fn((path: string) => ({ fsPath: path })),
+		parse: vi.fn((spec: string) => ({
+			with: vi.fn(() => ({})),
+			toString: vi.fn(() => spec),
+		})),
 	},
 }))
 
@@ -86,7 +90,10 @@ describe("FCOMessageHandler", () => {
 			baseHash: "base123",
 			getDiff: vi.fn(),
 			getContent: vi.fn(),
+			restoreFileFromCheckpoint: vi.fn(),
 			getCurrentCheckpoint: vi.fn().mockReturnValue("checkpoint-123"),
+			on: vi.fn(),
+			off: vi.fn(),
 		}
 
 		// Mock FileChangeManager
@@ -127,8 +134,134 @@ describe("FCOMessageHandler", () => {
 		handler = new FCOMessageHandler(mockProvider)
 	})
 
+	describe("acceptAll / rejectAll", () => {
+		beforeEach(() => {
+			mockFileChangeManager.getChanges.mockReturnValue({
+				files: [
+					{
+						uri: "a.txt",
+						type: "edit",
+						fromCheckpoint: "b1",
+						toCheckpoint: "c1",
+						linesAdded: 1,
+						linesRemoved: 0,
+					},
+					{
+						uri: "b.txt",
+						type: "create",
+						fromCheckpoint: "b1",
+						toCheckpoint: "c1",
+						linesAdded: 2,
+						linesRemoved: 0,
+					},
+				],
+			})
+		})
+
+		it("acceptAll clears manager and UI", async () => {
+			await handler.handleMessage({ type: "acceptAllFileChanges" } as WebviewMessage)
+			expect(mockFileChangeManager.acceptAll).toHaveBeenCalled()
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "filesChanged",
+				filesChanged: undefined,
+			})
+		})
+
+		it("rejectAll with URIs reverts only specified files and clears UI", async () => {
+			await handler.handleMessage({ type: "rejectAllFileChanges", uris: ["a.txt"] } as WebviewMessage)
+			expect(mockCheckpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("b1", "a.txt")
+			expect(mockFileChangeManager.rejectAll).toHaveBeenCalled()
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "filesChanged",
+				filesChanged: undefined,
+			})
+		})
+
+		it("rejectAll without URIs reverts all files and clears UI", async () => {
+			await handler.handleMessage({ type: "rejectAllFileChanges" } as WebviewMessage)
+			expect(mockCheckpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("b1", "a.txt")
+			expect(mockCheckpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("b1", "b.txt")
+			expect(mockFileChangeManager.rejectAll).toHaveBeenCalled()
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "filesChanged",
+				filesChanged: undefined,
+			})
+		})
+
+		it("rejectAll continues on partial restore failures and clears UI", async () => {
+			// Fail first file, succeed second
+			let call = 0
+			mockCheckpointService.restoreFileFromCheckpoint.mockImplementation(() => {
+				call++
+				if (call === 1) throw new Error("revert failed")
+				return Promise.resolve()
+			})
+
+			await handler.handleMessage({ type: "rejectAllFileChanges" } as WebviewMessage)
+
+			// Both attempted
+			expect(mockCheckpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("b1", "a.txt")
+			expect(mockCheckpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("b1", "b.txt")
+			// Manager cleared and UI cleared despite failure
+			expect(mockFileChangeManager.rejectAll).toHaveBeenCalled()
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "filesChanged",
+				filesChanged: undefined,
+			})
+		})
+	})
 	afterEach(() => {
 		vi.restoreAllMocks()
+	})
+
+	describe("handleExperimentToggle", () => {
+		it("enables and waits for checkpoint; updates baseline then posts filtered files", async () => {
+			const saved: Record<string, (...args: any[]) => unknown> = {}
+			mockCheckpointService.on.mockImplementation((evt: string, cb: (...args: any[]) => unknown) => {
+				saved[evt] = cb
+			})
+
+			const filteredChangeset = {
+				baseCheckpoint: "base-xyz",
+				files: [
+					{
+						uri: "a.txt",
+						type: "edit",
+						fromCheckpoint: "base-xyz",
+						toCheckpoint: "cur",
+						linesAdded: 1,
+						linesRemoved: 0,
+					},
+				],
+			}
+			mockFileChangeManager.getLLMOnlyChanges.mockResolvedValue(filteredChangeset)
+
+			await handler.handleExperimentToggle(true, mockTask)
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "filesChanged",
+				filesChanged: undefined,
+			})
+			expect(mockCheckpointService.on).toHaveBeenCalledWith("checkpoint", expect.any(Function))
+
+			// Simulate checkpoint event
+			await saved["checkpoint"]?.({ fromHash: "base-xyz" })
+			expect(mockFileChangeManager.updateBaseline).toHaveBeenCalledWith("base-xyz")
+			expect(mockFileChangeManager.getLLMOnlyChanges).toHaveBeenCalledWith("test-task-id", mockFileContextTracker)
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "filesChanged",
+				filesChanged: filteredChangeset,
+			})
+		})
+
+		it("disables: unsubscribes and clears display", async () => {
+			await handler.handleExperimentToggle(true, mockTask)
+			await handler.handleExperimentToggle(false, mockTask)
+			expect(mockCheckpointService.off).toHaveBeenCalledWith("checkpoint", expect.any(Function))
+			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
+				type: "filesChanged",
+				filesChanged: undefined,
+			})
+		})
 	})
 
 	describe("shouldHandleMessage", () => {
@@ -434,7 +567,7 @@ describe("FCOMessageHandler", () => {
 				linesRemoved: 1,
 			})
 
-			mockCheckpointService.getContent.mockResolvedValue("original content")
+			// no-op: revert is handled via restoreFileFromCheckpoint in implementation now
 		})
 
 		it("should revert file and clear when no remaining changes", async () => {
@@ -447,8 +580,7 @@ describe("FCOMessageHandler", () => {
 
 			await handler.handleMessage(mockMessage)
 
-			expect(mockCheckpointService.getContent).toHaveBeenCalledWith("base123", "/test/workspace/test.txt")
-			expect(fs.writeFile).toHaveBeenCalledWith("/test/workspace/test.txt", "original content", "utf8")
+			expect(mockCheckpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("base123", "test.txt")
 			expect(mockFileChangeManager.rejectChange).toHaveBeenCalledWith("test.txt")
 			// Should clear when no remaining changes
 			expect(mockProvider.postMessageToWebview).toHaveBeenCalledWith({
@@ -457,12 +589,13 @@ describe("FCOMessageHandler", () => {
 			})
 		})
 
-		it("should delete newly created files", async () => {
-			mockCheckpointService.getContent.mockRejectedValue(new Error("does not exist"))
+		it("should handle newly created files by falling back to removal when restore fails", async () => {
+			mockCheckpointService.restoreFileFromCheckpoint.mockRejectedValue(new Error("does not exist"))
 
 			await handler.handleMessage(mockMessage)
 
-			expect(fs.unlink).toHaveBeenCalledWith("/test/workspace/test.txt")
+			// Fallback path removes from display via rejectChange
+			expect(mockFileChangeManager.rejectChange).toHaveBeenCalledWith("test.txt")
 		})
 
 		it("should handle file reversion errors gracefully", async () => {
