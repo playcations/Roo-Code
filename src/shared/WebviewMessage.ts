@@ -142,6 +142,7 @@ export interface WebviewMessage {
 		| "mcpEnabled"
 		| "enableMcpServerCreation"
 		| "remoteControlEnabled"
+		| "taskSyncEnabled"
 		| "searchCommits"
 		| "alwaysApproveResubmit"
 		| "requestDelaySeconds"
@@ -230,6 +231,8 @@ export interface WebviewMessage {
 		| "queueMessage"
 		| "removeQueuedMessage"
 		| "editQueuedMessage"
+		| "dismissUpsell"
+		| "getDismissedUpsells"
 	text?: string
 	editedMessageContent?: string
 	tab?: "settings" | "history" | "mcp" | "modes" | "chat" | "marketplace" | "cloud"
@@ -279,6 +282,8 @@ export interface WebviewMessage {
 	checkOnly?: boolean // For deleteCustomMode check
 	fileChanges?: any[] // For filesChanged message
 	baseline?: string // For filesChangedBaselineUpdate
+	upsellId?: string // For dismissUpsell
+	list?: string[] // For dismissedUpsells response
 	codeIndexSettings?: {
 		// Global state settings
 		codebaseIndexEnabled: boolean
