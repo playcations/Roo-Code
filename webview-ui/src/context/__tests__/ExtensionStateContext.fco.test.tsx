@@ -252,6 +252,9 @@ describe("ExtensionStateContext - FCO Features", () => {
 			const stateMessage: ExtensionMessage = {
 				type: "state",
 				state: {
+					// Added required fields for ExtensionState
+					taskSyncEnabled: false,
+					featureRoomoteControlEnabled: false,
 					version: "1.0.0",
 					clineMessages: [],
 					taskHistory: [],
@@ -452,6 +455,9 @@ describe("ExtensionStateContext - FCO Features", () => {
 			const partialStateMessage: ExtensionMessage = {
 				type: "state",
 				state: {
+					// Added required fields for ExtensionState
+					taskSyncEnabled: false,
+					featureRoomoteControlEnabled: false,
 					version: "1.0.0",
 					clineMessages: [],
 					taskHistory: [],
@@ -648,6 +654,9 @@ describe("ExtensionStateContext - FCO Features", () => {
 			const stateWithUndefinedMessage: ExtensionMessage = {
 				type: "state",
 				state: {
+					// Added required fields for ExtensionState
+					taskSyncEnabled: false,
+					featureRoomoteControlEnabled: false,
 					version: "1.0.0",
 					clineMessages: [],
 					taskHistory: [],
@@ -763,6 +772,9 @@ describe("ExtensionStateContext - FCO Features", () => {
 				const stateMessage: ExtensionMessage = {
 					type: "state",
 					state: {
+						// Added required fields for ExtensionState
+						taskSyncEnabled: false,
+						featureRoomoteControlEnabled: false,
 						version: "1.0.0",
 						clineMessages: [],
 						taskHistory: [],
