@@ -91,7 +91,7 @@ import { getSystemPromptFilePath } from "../prompts/sections/custom-system-promp
 import { webviewMessageHandler } from "./webviewMessageHandler"
 import { getNonce } from "./getNonce"
 import { getUri } from "./getUri"
-import { FCOMessageHandler } from "../../services/file-changes/FCOMessageHandler"
+import { FilesChangedMessageHandler } from "../../services/file-changes/FilesChangedMessageHandler"
 import { FileChangeManager } from "../../services/file-changes/FileChangeManager"
 
 /**
@@ -138,10 +138,10 @@ export class ClineProvider
 	private currentWorkspacePath: string | undefined
 	// FileChangeManager instances scoped per taskId
 	private fileChangeManagers: Map<string, any> = new Map()
-	// Track the last committed checkpoint hash per task for FCO delta updates
+	// Track the last committed checkpoint hash per task for filesChanged delta updates
 	private lastCheckpointByTaskId: Map<string, string> = new Map()
-	// FCO message handler for universal baseline management
-	private fcoMessageHandler: FCOMessageHandler
+	// filesChanged message handler for universal baseline management
+	private filesChangedMessageHandler: FilesChangedMessageHandler
 
 	private recentTasksCache?: string[]
 	private pendingOperations: Map<string, PendingEditOperation> = new Map()
@@ -183,8 +183,8 @@ export class ClineProvider
 			await this.postStateToWebview()
 		})
 
-		// Initialize FCO message handler for universal baseline management
-		this.fcoMessageHandler = new FCOMessageHandler(this)
+		// Initialize filesChanged message handler for universal baseline management
+		this.filesChangedMessageHandler = new FilesChangedMessageHandler(this)
 
 		// Initialize MCP Hub through the singleton manager
 		McpServerManager.getInstance(this.context, this)
@@ -231,10 +231,10 @@ export class ClineProvider
 			instance.on(RooCodeEventName.TaskInteractive, onTaskInteractive)
 			instance.on(RooCodeEventName.TaskResumable, onTaskResumable)
 			instance.on(RooCodeEventName.TaskIdle, onTaskIdle)
+			instance.on(RooCodeEventName.TaskUserMessage, onTaskUserMessage)
 			instance.on(RooCodeEventName.TaskPaused, onTaskPaused)
 			instance.on(RooCodeEventName.TaskUnpaused, onTaskUnpaused)
 			instance.on(RooCodeEventName.TaskSpawned, onTaskSpawned)
-			instance.on(RooCodeEventName.TaskUserMessage, onTaskUserMessage)
 			instance.on(RooCodeEventName.TaskTokenUsageUpdated, onTaskTokenUsageUpdated)
 
 			// Store the cleanup functions for later removal.
@@ -592,8 +592,8 @@ export class ClineProvider
 		this.log("Disposed all disposables")
 		ClineProvider.activeInstances.delete(this)
 
-		// Ensure FCO checkpoint listeners are cleaned up
-		this.fcoMessageHandler?.cleanup()
+		// Ensure filesChanged checkpoint listeners are cleaned up
+		this.filesChangedMessageHandler?.cleanup()
 
 		// Clean up any event listeners attached to this provider
 		this.removeAllListeners()
@@ -1135,8 +1135,8 @@ export class ClineProvider
 	private setWebviewMessageListener(webview: vscode.Webview) {
 		const onReceiveMessage = async (message: WebviewMessage) => {
 			// Route Files Changed Overview messages first
-			if (this.fcoMessageHandler.shouldHandleMessage(message)) {
-				await this.fcoMessageHandler.handleMessage(message)
+			if (this.filesChangedMessageHandler.shouldHandleMessage(message)) {
+				await this.filesChangedMessageHandler.handleMessage(message)
 				return
 			}
 			await webviewMessageHandler(this, message, this.marketplaceManager)
@@ -2219,12 +2219,12 @@ export class ClineProvider
 		return manager
 	}
 
-	// FCO Message Handler access
-	public getFCOMessageHandler(): FCOMessageHandler {
-		return this.fcoMessageHandler
+	// filesChanged Message Handler access
+	public getFilesChangedMessageHandler(): FilesChangedMessageHandler {
+		return this.filesChangedMessageHandler
 	}
 
-	// Track last checkpoint per task for delta-based FCO updates
+	// Track last checkpoint per task for delta-based filesChanged updates
 	public setLastCheckpointForTask(taskId: string, commitHash: string) {
 		this.lastCheckpointByTaskId.set(taskId, commitHash)
 	}

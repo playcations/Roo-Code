@@ -30,6 +30,9 @@ export class FileContextTracker {
 	private recentlyEditedByRoo = new Set<string>()
 	private checkpointPossibleFiles = new Set<string>()
 
+	private readonly _onRooEdit = new vscode.EventEmitter<void>()
+	public readonly onRooEdit = this._onRooEdit.event
+
 	constructor(provider: ClineProvider, taskId: string) {
 		this.providerRef = new WeakRef(provider)
 		this.taskId = taskId
@@ -183,6 +186,7 @@ export class FileContextTracker {
 					newEntry.roo_edit_date = now
 					this.checkpointPossibleFiles.add(filePath)
 					this.markFileAsEditedByRoo(filePath)
+					this._onRooEdit.fire()
 					break
 
 				// read_tool/file_mentioned: Roo has read the file via a tool or file mention
@@ -223,5 +227,6 @@ export class FileContextTracker {
 			watcher.dispose()
 		}
 		this.fileWatchers.clear()
+		this._onRooEdit.dispose()
 	}
 }

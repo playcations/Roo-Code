@@ -230,7 +230,7 @@ export async function applyDiffToolLegacy(
 			// Get the formatted response message
 			const message = await cline.diffViewProvider.pushToolWriteResult(cline, cline.cwd, !fileExists)
 
-			// Track file as edited by LLM for FCO
+			// Track file as edited by LLM for filesChanged
 			try {
 				await cline.fileContextTracker.trackFileContext(relPath.toString(), "roo_edited")
 			} catch (error) {

@@ -60,7 +60,7 @@ const FilesChangedOverview: React.FC = () => {
 	// Debounced click handling for double-click prevention
 	const { isProcessing, handleWithDebounce } = useDebouncedAction(300)
 
-	// FCO initialization logic
+	// filesChanged initialization logic
 	const checkInit = React.useCallback(
 		(_baseCheckpoint: string) => {
 			if (!isInitialized) {

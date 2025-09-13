@@ -1950,19 +1950,19 @@ export const webviewMessageHandler = async (
 
 			await updateGlobalState("experiments", updatedExperiments)
 
-			// Simple delegation to FCO handler for universal baseline management
+			// Simple delegation to filesChanged handler for universal baseline management
 			try {
 				const currentTask = provider.getCurrentTask()
 				if (currentTask?.taskId) {
 					await provider
-						.getFCOMessageHandler()
+						.getFilesChangedMessageHandler()
 						?.handleExperimentToggle(
 							experiments.isEnabled(updatedExperiments, EXPERIMENT_IDS.FILES_CHANGED_OVERVIEW),
 							currentTask,
 						)
 				}
 			} catch (error) {
-				provider.log(`FCO: Error handling experiment toggle: ${error}`)
+				provider.log(`filesChanged: Error handling experiment toggle: ${error}`)
 			}
 
 			await provider.postStateToWebview()

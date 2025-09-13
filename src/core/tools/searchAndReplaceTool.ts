@@ -244,7 +244,7 @@ export async function searchAndReplaceTool(
 			await cline.diffViewProvider.saveChanges(diagnosticsEnabled, writeDelayMs)
 		}
 
-		// Track file edit operation for FCO
+		// Track file edit operation for filesChanged
 		try {
 			await cline.fileContextTracker.trackFileContext(validRelPath.toString(), "roo_edited")
 		} catch (error) {
