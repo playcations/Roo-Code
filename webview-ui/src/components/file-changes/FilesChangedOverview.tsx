@@ -17,6 +17,10 @@ const getFilePath = (uri: string): string => {
 	return parts.length > 0 ? parts.join("/") : "/"
 }
 
+const VIRTUALIZATION_THRESHOLD = 20
+const VIRTUALIZATION_ITEM_HEIGHT = 60 // Approximate height of each file item
+const VIRTUALIZATION_MAX_VISIBLE_ITEMS = 10
+
 /**
  * FilesChangedOverview is a self-managing component that listens for checkpoint events
  * and displays file changes. It manages its own state and communicates with the backend
@@ -31,31 +35,33 @@ const FilesChangedOverview: React.FC = () => {
 	const [changeset, setChangeset] = React.useState<FileChangeset | null>(null)
 	const [isInitialized, setIsInitialized] = React.useState(false)
 
-	const files = React.useMemo(() => changeset?.files || [], [changeset?.files])
+	const files = React.useMemo<FileChange[]>(() => changeset?.files ?? [], [changeset?.files])
 	const [isCollapsed, setIsCollapsed] = React.useState(true)
 
 	// Performance optimization: Use virtualization for large file lists
-	const VIRTUALIZATION_THRESHOLD = 50
-	const ITEM_HEIGHT = 60 // Approximate height of each file item
-	const MAX_VISIBLE_ITEMS = 10
 	const [scrollTop, setScrollTop] = React.useState(0)
 
 	const shouldVirtualize = files.length > VIRTUALIZATION_THRESHOLD
 
-	// Calculate visible items for virtualization
-	const visibleItems = React.useMemo(() => {
-		if (!shouldVirtualize) return files
+	const virtualizationState = React.useMemo(() => {
+		if (!shouldVirtualize) {
+			return {
+				items: files,
+				totalHeight: "auto" as const,
+				offsetY: 0,
+			}
+		}
 
-		const startIndex = Math.floor(scrollTop / ITEM_HEIGHT)
-		const endIndex = Math.min(startIndex + MAX_VISIBLE_ITEMS, files.length)
-		return files.slice(startIndex, endIndex).map((file, index) => ({
-			...file,
-			virtualIndex: startIndex + index,
-		}))
+		const startIndex = Math.floor(scrollTop / VIRTUALIZATION_ITEM_HEIGHT)
+		const endIndex = Math.min(startIndex + VIRTUALIZATION_MAX_VISIBLE_ITEMS, files.length)
+		return {
+			items: files.slice(startIndex, endIndex),
+			totalHeight: files.length * VIRTUALIZATION_ITEM_HEIGHT,
+			offsetY: startIndex * VIRTUALIZATION_ITEM_HEIGHT,
+		}
 	}, [files, scrollTop, shouldVirtualize])
 
-	const totalHeight = shouldVirtualize ? files.length * ITEM_HEIGHT : "auto"
-	const offsetY = shouldVirtualize ? Math.floor(scrollTop / ITEM_HEIGHT) * ITEM_HEIGHT : 0
+	const { items: visibleItems, totalHeight, offsetY } = virtualizationState
 
 	// Debounced click handling for double-click prevention
 	const { isProcessing, handleWithDebounce } = useDebouncedAction(300)
@@ -230,10 +236,12 @@ const FilesChangedOverview: React.FC = () => {
 						className={`codicon text-xs transition-transform duration-200 ease-out ${isCollapsed ? "codicon-chevron-right" : "codicon-chevron-down"}`}
 					/>
 					<h3 className="m-0 text-sm font-bold" data-testid="files-changed-header">
-						{t("file-changes:summary.count_with_changes", {
-							count: files.length,
-							changes: totalChanges,
-						})}
+						<span aria-live="polite" aria-atomic="true">
+							{t("file-changes:summary.count_with_changes", {
+								count: files.length,
+								changes: totalChanges,
+							})}
+						</span>
 					</h3>
 				</div>
 
@@ -248,7 +256,10 @@ const FilesChangedOverview: React.FC = () => {
 						tabIndex={0}
 						data-testid="reject-all-button"
 						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border-none rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
-						title={t("file-changes:actions.reject_all")}>
+						title={t("file-changes:actions.reject_all")}
+						type="button"
+						aria-disabled={isProcessing}
+						aria-label={t("file-changes:actions.reject_all")}>
 						{t("file-changes:actions.reject_all")}
 					</button>
 					<button
@@ -257,7 +268,10 @@ const FilesChangedOverview: React.FC = () => {
 						tabIndex={0}
 						data-testid="accept-all-button"
 						className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] border-none rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
-						title={t("file-changes:actions.accept_all")}>
+						title={t("file-changes:actions.accept_all")}
+						type="button"
+						aria-disabled={isProcessing}
+						aria-label={t("file-changes:actions.accept_all")}>
 						{t("file-changes:actions.accept_all")}
 					</button>
 				</div>
@@ -270,11 +284,13 @@ const FilesChangedOverview: React.FC = () => {
 					style={{
 						opacity: isCollapsed ? 0 : 1,
 					}}
-					onScroll={handleScroll}>
+					onScroll={handleScroll}
+					role="region"
+					aria-label={t("file-changes:header.files_changed", { defaultValue: "Files changed" })}>
 					{shouldVirtualize && (
 						<div style={{ height: totalHeight, position: "relative" }}>
 							<div style={{ transform: `translateY(${offsetY}px)` }}>
-								{visibleItems.map((file: any) => (
+								{visibleItems.map((file) => (
 									<FileItem
 										key={file.uri}
 										file={file}
@@ -291,7 +307,7 @@ const FilesChangedOverview: React.FC = () => {
 						</div>
 					)}
 					{!shouldVirtualize &&
-						files.map((file: FileChange) => (
+						files.map((file) => (
 							<FileItem
 								key={file.uri}
 								file={file}
@@ -363,23 +379,31 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 						disabled={isProcessing}
 						title={t("file-changes:actions.view_diff")}
 						data-testid={`diff-${file.uri}`}
-						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[35px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
+						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[35px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						type="button"
+						aria-disabled={isProcessing}>
 						Diff
 					</button>
 					<button
 						onClick={() => handleWithDebounce(() => onRejectFile(file.uri))}
 						disabled={isProcessing}
 						title={t("file-changes:actions.reject_file")}
+						aria-label={t("file-changes:actions.reject_file")}
 						data-testid={`reject-${file.uri}`}
-						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
+						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						type="button"
+						aria-disabled={isProcessing}>
 						✗
 					</button>
 					<button
 						onClick={() => handleWithDebounce(() => onAcceptFile(file.uri))}
 						disabled={isProcessing}
 						title={t("file-changes:actions.accept_file")}
+						aria-label={t("file-changes:actions.accept_file")}
 						data-testid={`accept-${file.uri}`}
-						className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer">
+						className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						type="button"
+						aria-disabled={isProcessing}>
 						✓
 					</button>
 				</div>

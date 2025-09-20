@@ -90,8 +90,24 @@ export class FilesChangedMessageHandler {
 			return
 		}
 
+		const baseline =
+			effectiveManager.getChanges().baseCheckpoint ||
+			task?.checkpointService?.baseHash ||
+			task?.checkpointService?.getCurrentCheckpoint?.()
+
+		if (!baseline) {
+			// Put URIs back in queue if no baseline available yet
+			state.queueChildUris(pendingUris)
+			return
+		}
+
+		// Process each subtask file individually using the same logic as normal roo_edited events
 		for (const uri of pendingUris) {
-			await this.refreshEditedFile(task, uri)
+			try {
+				await this.refreshEditedFile(task, uri)
+			} catch (error) {
+				this.provider.log(`FilesChanged: Failed to process queued file ${uri}: ${error}`)
+			}
 		}
 	}
 
@@ -139,23 +155,25 @@ export class FilesChangedMessageHandler {
 			return
 		}
 
-		this.isEnabled = enabled
-
-		if (enabled && task) {
-			try {
-				await getCheckpointService(task)
-			} catch (error) {
-				this.provider.log(`FilesChanged: Failed to initialize checkpoint service: ${error}`)
-				return
-			}
-		}
-
 		if (enabled) {
+			if (task) {
+				try {
+					await getCheckpointService(task)
+				} catch (error) {
+					this.provider.log(`FilesChanged: Failed to initialize checkpoint service: ${error}`)
+					this.isEnabled = false
+					return
+				}
+			}
+
+			this.isEnabled = true
 			this.markWaitingForTask(task, true)
 			this.provider.log("FilesChanged: Enabled, waiting for next checkpoint to establish monitoring baseline")
 			this.clearFilesChangedDisplay()
 			await this.attachToTask(task)
+			this.replayTaskChanges(task)
 		} else {
+			this.isEnabled = false
 			const targetTask = task ?? this.activeTask ?? (this.provider.getCurrentTask() as Task | undefined)
 			if (targetTask) {
 				this.markWaitingForTask(targetTask, false)
@@ -182,10 +200,7 @@ export class FilesChangedMessageHandler {
 			target.disposeFilesChangedState()
 		}
 		this.activeTask = undefined
-		if (this.trackerDebounce) {
-			clearTimeout(this.trackerDebounce)
-			this.trackerDebounce = undefined
-		}
+		this.clearTrackerDebounce()
 	}
 
 	private async attachToTask(task: Task | undefined): Promise<void> {
@@ -268,12 +283,24 @@ export class FilesChangedMessageHandler {
 				}
 
 				const baseline = event?.fromHash ?? event?.toHash
+				const hadQueued = state?.hasQueuedChildUris() ?? false
+				const hasExistingFiles = manager.getChanges().files.length > 0
+
 				if (baseline) {
-					manager.reset(baseline)
+					if (hasExistingFiles && hadQueued) {
+						// Adding child files to existing parent files - preserve existing files
+						manager.setBaseline(baseline)
+						this.provider.log(
+							`FilesChanged: Updated baseline to ${baseline}, preserving ${manager.getChanges().files.length} existing files`,
+						)
+					} else {
+						// Starting fresh or no existing files - clear is appropriate
+						manager.reset(baseline)
+						this.provider.log(`FilesChanged: Reset to baseline ${baseline}`)
+					}
 				}
 				this.markWaitingForTask(task, false)
 
-				const hadQueued = state?.hasQueuedChildUris() ?? false
 				if (hadQueued) {
 					await this.drainQueuedUris(task, manager)
 					this.provider.log(
@@ -336,6 +363,29 @@ export class FilesChangedMessageHandler {
 			task.fileContextTracker.off("roo_edited", this.trackerListener)
 		}
 		this.trackerListener = undefined
+		this.clearTrackerDebounce()
+	}
+
+	private clearTrackerDebounce(): void {
+		if (this.trackerDebounce) {
+			clearTimeout(this.trackerDebounce)
+			this.trackerDebounce = undefined
+		}
+	}
+
+	private replayTaskChanges(task: Task | undefined): void {
+		if (!this.isEnabled || !task) {
+			return
+		}
+		const manager = this.getManager(task)
+		if (!manager) {
+			return
+		}
+		const changes = manager.getChanges()
+		if (changes.files.length > 0) {
+			this.markWaitingForTask(task, false)
+			this.postChanges(manager)
+		}
 	}
 
 	/**
@@ -638,26 +688,26 @@ export class FilesChangedMessageHandler {
 			await this.handleExperimentToggle(shouldBeEnabled, task)
 			return
 		}
-		if (this.isEnabled) {
-			try {
-				await getCheckpointService(task)
-			} catch (error) {
-				this.provider.log(`FilesChanged: Failed to initialize checkpoint service: ${error}`)
-			}
+		if (!shouldBeEnabled) {
+			return
+		}
 
-			// Only reattach if we're not already attached to this task, or if there are pending child files
-			const taskState = this.getState(task)
-			const needsReattach = this.activeTask !== task || (taskState && taskState.hasQueuedChildUris())
+		try {
+			await getCheckpointService(task)
+		} catch (error) {
+			this.provider.log(`FilesChanged: Failed to initialize checkpoint service: ${error}`)
+			return
+		}
 
-			if (needsReattach) {
-				await this.attachToTask(task)
-			} else {
-				// Just ensure current state is posted if we're already properly attached
-				const manager = this.getManager(task)
-				if (manager && !this.isWaitingForTask(task)) {
-					this.postChanges(manager)
-				}
-			}
+		// Only reattach if we're not already attached to this task, or if there are pending child files
+		const taskState = this.getState(task)
+		const needsReattach = this.activeTask !== task || (taskState && taskState.hasQueuedChildUris())
+
+		if (needsReattach) {
+			await this.attachToTask(task)
+			this.replayTaskChanges(task)
+		} else {
+			this.replayTaskChanges(task)
 		}
 	}
 

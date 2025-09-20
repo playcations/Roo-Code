@@ -24,6 +24,7 @@ import { ContextWindowProgress } from "./ContextWindowProgress"
 import { Mention } from "./Mention"
 import { TodoListDisplay } from "./TodoListDisplay"
 import FilesChangedOverview from "../file-changes/FilesChangedOverview"
+import ErrorBoundary from "../ErrorBoundary"
 
 export interface TaskHeaderProps {
 	task: ClineMessage
@@ -328,7 +329,9 @@ const TaskHeader = ({
 				)}
 			</div>
 			<TodoListDisplay todos={todos ?? (task as any)?.tool?.todos ?? []} />
-			<FilesChangedOverview />
+			<ErrorBoundary>
+				<FilesChangedOverview />
+			</ErrorBoundary>
 			<CloudUpsellDialog open={isOpen} onOpenChange={closeUpsell} onConnect={handleConnect} />
 		</div>
 	)

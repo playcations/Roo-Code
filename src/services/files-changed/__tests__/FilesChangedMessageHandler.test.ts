@@ -4,8 +4,9 @@ import { FilesChangedMessageHandler } from "../FilesChangedMessageHandler"
 import { FilesChangedManager } from "../FilesChangedManager"
 import { TaskFilesChangedState } from "../TaskFilesChangedState"
 import type { Task } from "../../../core/task/Task"
+import { getCheckpointService } from "../../../core/checkpoints"
 
-vi.mock("../../core/checkpoints", () => ({
+vi.mock("../../../core/checkpoints", () => ({
 	getCheckpointService: vi.fn(async () => ({})),
 }))
 
@@ -43,7 +44,9 @@ describe("FilesChangedMessageHandler", () => {
 
 	beforeEach(() => {
 		vi.useFakeTimers()
+		vi.mocked(getCheckpointService).mockReset()
 		checkpointService = new MockCheckpointService()
+		vi.mocked(getCheckpointService).mockResolvedValue(checkpointService as any)
 		fileContextTracker = new MockFileContextTracker()
 		posts = []
 
@@ -278,6 +281,104 @@ describe("FilesChangedMessageHandler", () => {
 		await advance()
 		const message = getLatestFilesMessage()
 		expect(message?.filesChanged?.files?.map((f: any) => f.uri).sort()).toEqual(["app/bar.ts", "app/foo.ts"])
+	})
+
+	it("does not clear queued diff updates when rehydrating task state", async () => {
+		await handler.handleExperimentToggle(true, provider.getCurrentTask())
+		await emitBaseline()
+
+		fileContextTracker.emit("roo_edited", "app/foo.ts")
+		await advance()
+
+		posts.length = 0
+		const freshState = new TaskFilesChangedState()
+		freshState.cloneFrom(taskState)
+		const freshTask = {
+			taskId: "task-1",
+			checkpointService,
+			fileContextTracker,
+			ensureFilesChangedState: vi.fn(() => freshState),
+			getFilesChangedState: vi.fn(() => freshState),
+			disposeFilesChangedState: vi.fn(() => freshState.dispose()),
+		} as unknown as Task
+
+		const previousGetter = provider.getCurrentTask
+		provider.getCurrentTask = () => freshTask
+		await handler.applyExperimentsToTask(freshTask)
+		provider.getCurrentTask = previousGetter
+
+		const latest = getLatestFilesMessage()
+		expect((latest?.filesChanged?.files ?? []).length).toBeGreaterThan(0)
+	})
+
+	it("clears pending tracker debounce when switching tasks", async () => {
+		await handler.handleExperimentToggle(true, provider.getCurrentTask())
+		await emitBaseline()
+
+		fileContextTracker.emit("roo_edited", "app/foo.ts")
+		expect(vi.getTimerCount()).toBe(1)
+
+		const nextState = new TaskFilesChangedState()
+		const nextTask = {
+			taskId: "task-2",
+			checkpointService: new MockCheckpointService(),
+			fileContextTracker: new MockFileContextTracker(),
+			ensureFilesChangedState: vi.fn(() => nextState),
+			getFilesChangedState: vi.fn(() => nextState),
+			disposeFilesChangedState: vi.fn(() => nextState.dispose()),
+		} as unknown as Task
+
+		await handler.applyExperimentsToTask(nextTask)
+
+		expect(vi.getTimerCount()).toBe(0)
+	})
+
+	it("logs and aborts enable when checkpoint service initialization fails", async () => {
+		vi.mocked(getCheckpointService).mockRejectedValueOnce(new Error("nope"))
+
+		await handler.handleExperimentToggle(true, provider.getCurrentTask())
+
+		expect(provider.log).toHaveBeenCalledWith(expect.stringContaining("Failed to initialize checkpoint service"))
+		expect(fileContextTracker.listenerCount("roo_edited")).toBe(0)
+	})
+
+	it("maintains existing files when queued child URIs drain immediately", async () => {
+		await handler.handleExperimentToggle(true, provider.getCurrentTask())
+		await emitBaseline()
+
+		checkpointService.getDiff.mockResolvedValueOnce([
+			{
+				paths: { relative: "app/foo.ts", newFile: false, deletedFile: false },
+				content: { before: "console.log(1)\n", after: "console.log(2)\n" },
+			},
+		])
+		checkpointService.getDiffStats.mockResolvedValueOnce({ "app/foo.ts": { insertions: 1, deletions: 0 } })
+
+		fileContextTracker.emit("roo_edited", "app/foo.ts")
+		await advance()
+		posts.length = 0
+
+		const combinedDiff = [
+			{
+				paths: { relative: "app/foo.ts", newFile: false, deletedFile: false },
+				content: { before: "console.log(2)\n", after: "console.log(3)\n" },
+			},
+			{
+				paths: { relative: "child.ts", newFile: true, deletedFile: false },
+				content: { before: "", after: "export const child = 1\n" },
+			},
+		]
+		checkpointService.getDiff.mockResolvedValue(combinedDiff)
+		checkpointService.getDiffStats.mockResolvedValue({
+			"app/foo.ts": { insertions: 1, deletions: 0 },
+			"child.ts": { insertions: 1, deletions: 0 },
+		})
+
+		handler.queueChildFiles(provider.getCurrentTask(), "child-task", ["child.ts"])
+		await vi.waitUntil(() => Boolean(getLatestFilesMessage()?.filesChanged))
+
+		const uris = (getLatestFilesMessage()?.filesChanged?.files ?? []).map((f: any) => f.uri)
+		expect(uris.sort()).toEqual(["app/foo.ts", "child.ts"].sort())
 	})
 
 	it("reattaches listeners when switching to a subtask", async () => {

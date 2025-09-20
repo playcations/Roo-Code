@@ -1,3 +1,5 @@
+import { diffLines } from "diff"
+
 import { FileChange, FileChangeset } from "@roo-code/types"
 import type { FileContextTracker } from "../../core/context-tracking/FileContextTracker"
 
@@ -80,24 +82,15 @@ export class FilesChangedManager {
 		originalContent: string,
 		newContent: string,
 	): { linesAdded: number; linesRemoved: number } {
-		const originalLines = originalContent === "" ? [] : originalContent.split("\n")
-		const newLines = newContent === "" ? [] : newContent.split("\n")
-
-		const maxLines = Math.max(originalLines.length, newLines.length)
+		const hunks = diffLines(originalContent ?? "", newContent ?? "")
 		let linesAdded = 0
 		let linesRemoved = 0
 
-		for (let i = 0; i < maxLines; i++) {
-			const originalLine = i < originalLines.length ? originalLines[i] : undefined
-			const newLine = i < newLines.length ? newLines[i] : undefined
-
-			if (originalLine === undefined && newLine !== undefined) {
-				linesAdded++
-			} else if (originalLine !== undefined && newLine === undefined) {
-				linesRemoved++
-			} else if (originalLine !== newLine) {
-				linesAdded++
-				linesRemoved++
+		for (const hunk of hunks) {
+			if (hunk.added) {
+				linesAdded += hunk.count ?? 0
+			} else if (hunk.removed) {
+				linesRemoved += hunk.count ?? 0
 			}
 		}
 

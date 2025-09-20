@@ -87,6 +87,6 @@ export class TaskFilesChangedState {
 	}
 
 	public shouldWaitForNextCheckpoint(): boolean {
-		return this.waitingForCheckpoint && this.queuedChildUris.size === 0
+		return this.waitingForCheckpoint
 	}
 }
