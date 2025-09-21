@@ -2,7 +2,7 @@
 	"header": {
 		"files_changed": "Fitxers Modificats",
 		"expand": "Expandir llista de fitxers",
-		"collapse": "Contreure llista de fitxers"
+		"collapse": "Contraure llista de fitxers"
 	},
 	"actions": {
 		"accept_all": "Acceptar Tot",
