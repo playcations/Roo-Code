@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 export function useDebouncedAction(delay = 300) {
 	const [isProcessing, setIsProcessing] = useState(false)
@@ -25,6 +25,15 @@ export function useDebouncedAction(delay = 300) {
 		},
 		[isProcessing, delay],
 	)
+
+	// Cleanup effect to prevent memory leaks
+	useEffect(() => {
+		return () => {
+			if (timeoutRef.current) {
+				clearTimeout(timeoutRef.current)
+			}
+		}
+	}, [])
 
 	return { isProcessing, handleWithDebounce }
 }

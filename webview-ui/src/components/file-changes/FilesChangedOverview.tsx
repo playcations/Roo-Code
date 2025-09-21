@@ -100,28 +100,48 @@ const FilesChangedOverview: React.FC = () => {
 
 	// Action handlers
 	const handleViewDiff = React.useCallback((uri: string) => {
-		vscode.postMessage({ type: "viewDiff", uri })
+		try {
+			vscode.postMessage({ type: "viewDiff", uri })
+		} catch (error) {
+			console.error("Failed to view diff for file:", uri, error)
+		}
 	}, [])
 
 	const handleAcceptFile = React.useCallback((uri: string) => {
-		vscode.postMessage({ type: "acceptFileChange", uri })
-		// Backend will send updated filesChanged message with filtered results
+		try {
+			vscode.postMessage({ type: "acceptFileChange", uri })
+			// Backend will send updated filesChanged message with filtered results
+		} catch (error) {
+			console.error("Failed to accept file change:", uri, error)
+		}
 	}, [])
 
 	const handleRejectFile = React.useCallback((uri: string) => {
-		vscode.postMessage({ type: "rejectFileChange", uri })
-		// Backend will send updated filesChanged message with filtered results
+		try {
+			vscode.postMessage({ type: "rejectFileChange", uri })
+			// Backend will send updated filesChanged message with filtered results
+		} catch (error) {
+			console.error("Failed to reject file change:", uri, error)
+		}
 	}, [])
 
 	const handleAcceptAll = React.useCallback(() => {
-		vscode.postMessage({ type: "acceptAllFileChanges" })
-		// Backend will send updated filesChanged message with filtered results
+		try {
+			vscode.postMessage({ type: "acceptAllFileChanges" })
+			// Backend will send updated filesChanged message with filtered results
+		} catch (error) {
+			console.error("Failed to accept all file changes:", error)
+		}
 	}, [])
 
 	const handleRejectAll = React.useCallback(() => {
-		const visibleUris = files.map((file) => file.uri)
-		vscode.postMessage({ type: "rejectAllFileChanges", uris: visibleUris })
-		// Backend will send updated filesChanged message with filtered results
+		try {
+			const visibleUris = files.map((file) => file.uri)
+			vscode.postMessage({ type: "rejectAllFileChanges", uris: visibleUris })
+			// Backend will send updated filesChanged message with filtered results
+		} catch (error) {
+			console.error("Failed to reject all file changes:", error)
+		}
 	}, [files])
 
 	/**
@@ -255,7 +275,7 @@ const FilesChangedOverview: React.FC = () => {
 						disabled={isProcessing}
 						tabIndex={0}
 						data-testid="reject-all-button"
-						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border-none rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border-none rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--vscode-focusBorder)]"
 						title={t("file-changes:actions.reject_all")}
 						type="button"
 						aria-disabled={isProcessing}
@@ -267,7 +287,7 @@ const FilesChangedOverview: React.FC = () => {
 						disabled={isProcessing}
 						tabIndex={0}
 						data-testid="accept-all-button"
-						className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] border-none rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] border-none rounded px-2 py-1 text-xs disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--vscode-focusBorder)]"
 						title={t("file-changes:actions.accept_all")}
 						type="button"
 						aria-disabled={isProcessing}
@@ -379,7 +399,7 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 						disabled={isProcessing}
 						title={t("file-changes:actions.view_diff")}
 						data-testid={`diff-${file.uri}`}
-						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[35px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[35px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--vscode-focusBorder)]"
 						type="button"
 						aria-disabled={isProcessing}>
 						Diff
@@ -390,7 +410,7 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 						title={t("file-changes:actions.reject_file")}
 						aria-label={t("file-changes:actions.reject_file")}
 						data-testid={`reject-${file.uri}`}
-						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						className="bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--vscode-focusBorder)]"
 						type="button"
 						aria-disabled={isProcessing}>
 						✗
@@ -401,7 +421,7 @@ const FileItem: React.FC<FileItemProps> = React.memo(
 						title={t("file-changes:actions.accept_file")}
 						aria-label={t("file-changes:actions.accept_file")}
 						data-testid={`accept-${file.uri}`}
-						className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+						className="bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] border border-[var(--vscode-button-border)] rounded px-1.5 py-0.5 text-[11px] min-w-[20px] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--vscode-focusBorder)]"
 						type="button"
 						aria-disabled={isProcessing}>
 						✓
