@@ -82,7 +82,7 @@ describe("FilesChangedMessageHandler", () => {
 
 	const getLatestFilesMessage = () => posts.filter((m) => m.type === "filesChanged").pop()
 	const advance = async () => {
-		await vi.advanceTimersByTimeAsync(250)
+		await vi.advanceTimersByTimeAsync(1200) // Increased to handle new 500-1000ms debounce timing
 		await Promise.resolve()
 	}
 	const emitBaseline = async (service = checkpointService, fromHash = "commit-A", toHash = "commit-B") => {

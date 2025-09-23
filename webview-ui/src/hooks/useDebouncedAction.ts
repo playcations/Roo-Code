@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 export function useDebouncedAction(delay = 300) {
 	const [isProcessing, setIsProcessing] = useState(false)
-	const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+	const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
 	const handleWithDebounce = useCallback(
 		(operation: () => void) => {

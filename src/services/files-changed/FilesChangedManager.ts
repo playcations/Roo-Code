@@ -1,5 +1,3 @@
-import { diffLines } from "diff"
-
 import { FileChange, FileChangeset } from "@roo-code/types"
 import type { FileContextTracker } from "../../core/context-tracking/FileContextTracker"
 
@@ -73,28 +71,6 @@ export class FilesChangedManager {
 
 	public dispose(): void {
 		this.clearFiles()
-	}
-
-	/**
-	 * Utility helper for callers that need to compute diff stats themselves.
-	 */
-	public static calculateLineDifferences(
-		originalContent: string,
-		newContent: string,
-	): { linesAdded: number; linesRemoved: number } {
-		const hunks = diffLines(originalContent ?? "", newContent ?? "")
-		let linesAdded = 0
-		let linesRemoved = 0
-
-		for (const hunk of hunks) {
-			if (hunk.added) {
-				linesAdded += hunk.count ?? 0
-			} else if (hunk.removed) {
-				linesRemoved += hunk.count ?? 0
-			}
-		}
-
-		return { linesAdded, linesRemoved }
 	}
 }
 

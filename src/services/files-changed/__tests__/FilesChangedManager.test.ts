@@ -59,18 +59,4 @@ describe("FilesChangedManager", () => {
 		const filtered = await manager.getLLMOnlyChanges("task-1", {} as any)
 		expect(filtered.files.map((f) => f.uri)).toEqual(["app/foo.ts"])
 	})
-
-	it("computes accurate line stats for pure insertions", () => {
-		const original = ["console.log(1)", "console.log(2)", "console.log(3)"].join("\n")
-		const updated = [
-			"import { log } from 'node:console'",
-			"console.log(1)",
-			"console.log(2)",
-			"console.log(3)",
-		].join("\n")
-
-		const result = FilesChangedManager.calculateLineDifferences(original, updated)
-
-		expect(result).toEqual({ linesAdded: 1, linesRemoved: 0 })
-	})
 })

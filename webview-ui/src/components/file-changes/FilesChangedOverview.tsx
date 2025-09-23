@@ -8,11 +8,11 @@ import { EXPERIMENT_IDS } from "../../../../src/shared/experiments"
 
 // Helper functions for file path display
 const getFileName = (uri: string): string => {
-	return uri.split("/").pop() || uri
+	return uri.split(/[/\\]/).pop() || uri
 }
 
 const getFilePath = (uri: string): string => {
-	const parts = uri.split("/")
+	const parts = uri.split(/[/\\]/)
 	parts.pop() // Remove filename
 	return parts.length > 0 ? parts.join("/") : "/"
 }

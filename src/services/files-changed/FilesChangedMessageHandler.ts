@@ -1,13 +1,14 @@
 import * as vscode from "vscode"
+import * as path from "path"
 import { WebviewMessage } from "../../shared/WebviewMessage"
 import type { FileChange, FileChangeType } from "@roo-code/types"
 import { FilesChangedManager } from "./FilesChangedManager"
 import type { TaskFilesChangedState } from "./TaskFilesChangedState"
+import { FcoTextDocumentContentProvider } from "./FcoTextDocumentContentProvider"
 import { ClineProvider } from "../../core/webview/ClineProvider"
 import { EXPERIMENT_IDS, experiments } from "../../shared/experiments"
 import { getCheckpointService } from "../../core/checkpoints"
 import type { Task } from "../../core/task/Task"
-const DIFF_VIEW_URI_SCHEME = "cline-diff"
 // No experiments migration handler needed anymore; FilesChanged is managed via updateExperimental in webviewMessageHandler
 
 /**
@@ -17,8 +18,11 @@ export class FilesChangedMessageHandler {
 	private isEnabled = false
 	private checkpointEventListener?: (event: any) => void
 	private trackerListener?: (filePath: string) => void
-	private trackerDebounce?: NodeJS.Timeout
+	private trackerDebounce?: ReturnType<typeof setTimeout>
 	private activeTask?: Task
+	private pendingFiles = new Set<string>()
+	private burstCount = 0
+	private lastEditTime = 0
 
 	constructor(private provider: ClineProvider) {}
 
@@ -129,6 +133,41 @@ export class FilesChangedMessageHandler {
 		await this.refreshEditedFile(task, filePath)
 	}
 
+	/**
+	 * Process batch of files that were edited during debounce period
+	 * More efficient than individual file processing during edit bursts
+	 */
+	private async handleFileEditBatch(task: Task | undefined): Promise<void> {
+		if (!task || !this.isEnabled) {
+			return
+		}
+
+		// Take all pending files and clear the set
+		const filesToProcess = Array.from(this.pendingFiles)
+		this.pendingFiles.clear()
+
+		if (filesToProcess.length === 0) {
+			return
+		}
+
+		// Handle wildcard - if any file is "*", do full refresh
+		if (filesToProcess.includes("*")) {
+			await this.refreshAllFromBaseline(task)
+			return
+		}
+
+		// If waiting for task, queue all pending files
+		if (this.isWaitingForTask(task)) {
+			for (const filePath of filesToProcess) {
+				this.queuePendingUri(task, filePath)
+			}
+			return
+		}
+
+		// Batch process all files together
+		await this.refreshEditedFilesBatch(task, filesToProcess)
+	}
+
 	private getManager(task: Task | undefined): FilesChangedManager | undefined {
 		return this.getState(task)?.getManager()
 	}
@@ -201,6 +240,8 @@ export class FilesChangedMessageHandler {
 		}
 		this.activeTask = undefined
 		this.clearTrackerDebounce()
+		// Clear any pending files to prevent memory leaks
+		this.pendingFiles.clear()
 	}
 
 	private async attachToTask(task: Task | undefined): Promise<void> {
@@ -341,17 +382,33 @@ export class FilesChangedMessageHandler {
 			if (typeof filePath !== "string" || filePath.length === 0) {
 				return
 			}
+
+			// Add file to pending batch
+			this.pendingFiles.add(filePath)
+
 			if (this.trackerDebounce) {
 				clearTimeout(this.trackerDebounce)
 			}
-			const targetPath = filePath
+
+			// Burst detection for adaptive debouncing
+			const now = Date.now()
+			if (now - this.lastEditTime < 1000) {
+				this.burstCount++
+			} else {
+				this.burstCount = 0
+			}
+			this.lastEditTime = now
+
+			// Adaptive timing: longer delay during bursts to batch more files
+			const debounceMs = this.burstCount > 3 ? 1000 : 500
+
 			this.trackerDebounce = setTimeout(async () => {
 				try {
-					await this.handleFileEdited(listeningTask, targetPath)
+					await this.handleFileEditBatch(listeningTask)
 				} catch (error) {
-					this.provider.log(`FilesChanged: tracker refresh failed: ${error}`)
+					this.provider.log(`FilesChanged: batch refresh failed: ${error}`)
 				}
-			}, 150)
+			}, debounceMs)
 		}
 		if (task?.fileContextTracker?.on) {
 			task.fileContextTracker.on("roo_edited", this.trackerListener)
@@ -371,6 +428,8 @@ export class FilesChangedMessageHandler {
 			clearTimeout(this.trackerDebounce)
 			this.trackerDebounce = undefined
 		}
+		// Clear pending files when clearing debounce to prevent stale batches
+		this.pendingFiles.clear()
 	}
 
 	private replayTaskChanges(task: Task | undefined): void {
@@ -521,16 +580,17 @@ export class FilesChangedMessageHandler {
 		const afterContent = fileChangeData.content.after || ""
 
 		try {
-			const beforeUri = vscode.Uri.parse(`${DIFF_VIEW_URI_SCHEME}:${uri}`).with({
-				query: Buffer.from(beforeContent).toString("base64"),
-			})
-			const afterUri = vscode.Uri.parse(`${DIFF_VIEW_URI_SCHEME}:${uri}`).with({
-				query: Buffer.from(afterContent).toString("base64"),
-			})
+			// Use dedicated FCO content provider - eliminates base64 encoding in query strings!
+			const fcoProvider = FcoTextDocumentContentProvider.getInstance()
+			const { beforeUri, afterUri } = fcoProvider.storeDiffContent(beforeContent, afterContent, uri)
 
-			await vscode.commands.executeCommand("vscode.diff", beforeUri, afterUri, `${uri}: Before ↔ After`, {
-				preview: false,
-			})
+			await vscode.commands.executeCommand(
+				"vscode.diff",
+				vscode.Uri.parse(beforeUri),
+				vscode.Uri.parse(afterUri),
+				`${uri}: Before ↔ After`,
+				{ preview: false },
+			)
 		} catch (fileError) {
 			console.error(
 				`Failed to open diff view: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
@@ -541,6 +601,57 @@ export class FilesChangedMessageHandler {
 		}
 	}
 
+	/**
+	 * Closes diff tabs for a specific file and cleans up stored content
+	 */
+	private async closeDiffTabsForFile(filePath: string): Promise<void> {
+		const fcoProvider = FcoTextDocumentContentProvider.getInstance()
+		const uris = fcoProvider.getUrisForFile(filePath)
+
+		if (!uris) return
+
+		try {
+			// Find and close diff tabs
+			const allTabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs)
+			const diffTabsToClose: vscode.Tab[] = []
+
+			for (const tab of allTabs) {
+				if (tab.input instanceof vscode.TabInputTextDiff) {
+					const originalScheme = tab.input.original?.scheme
+					const modifiedScheme = tab.input.modified?.scheme
+
+					// Check if this is an FCO diff tab
+					if (originalScheme === "fco-diff" || modifiedScheme === "fco-diff") {
+						const originalPath = tab.input.original?.path
+						const modifiedPath = tab.input.modified?.path
+
+						// Extract hash from URI path to match against our stored URIs
+						const beforeHash = uris.beforeUri.split(":")[1]
+						const afterHash = uris.afterUri.split(":")[1]
+
+						if (originalPath?.includes(beforeHash) || modifiedPath?.includes(afterHash)) {
+							diffTabsToClose.push(tab)
+						}
+					}
+				}
+			}
+
+			// Close matching diff tabs
+			for (const tab of diffTabsToClose) {
+				try {
+					await vscode.window.tabGroups.close(tab)
+				} catch (error) {
+					this.provider.log(`FilesChanged: Error closing diff tab: ${error}`)
+				}
+			}
+
+			// Clean up stored content
+			fcoProvider.cleanupFile(filePath)
+		} catch (error) {
+			this.provider.log(`FilesChanged: Error during diff tab cleanup for ${filePath}: ${error}`)
+		}
+	}
+
 	private async handleAcceptFileChange(message: WebviewMessage): Promise<void> {
 		const task = this.resolveTask()
 		const manager = this.getManager(task) ?? this.ensureManager(task)
@@ -548,9 +659,27 @@ export class FilesChangedMessageHandler {
 			return
 		}
 
+		// Close diff tabs and clean up content first
+		await this.closeDiffTabsForFile(message.uri)
+
+		// Accept the change
 		manager.acceptChange(message.uri)
 		this.provider.log(`FilesChanged: Accepted change for ${message.uri} in task ${task?.taskId ?? "unknown"}`)
 		this.postChanges(manager)
+
+		// Open the modified file for user to see the accepted changes
+		try {
+			if (!task?.cwd) {
+				this.provider.log(`FilesChanged: Cannot open file - no task or workspace available`)
+				return
+			}
+			// Resolve relative path to absolute path within workspace
+			const absolutePath = path.resolve(task.cwd, message.uri)
+			const fileUri = vscode.Uri.file(absolutePath)
+			await vscode.window.showTextDocument(fileUri, { preview: false })
+		} catch (error) {
+			this.provider.log(`FilesChanged: Could not open file after accept: ${error}`)
+		}
 	}
 
 	private async handleRejectFileChange(message: WebviewMessage): Promise<void> {
@@ -567,16 +696,33 @@ export class FilesChangedMessageHandler {
 		}
 
 		try {
+			// Close diff tabs and clean up content first
+			await this.closeDiffTabsForFile(message.uri)
+
 			const fileChange = manager.getFileChange(message.uri)
 			if (fileChange) {
 				await this.revertFileToCheckpoint(message.uri, fileChange.fromCheckpoint, checkpointService)
 			}
+
 			manager.rejectChange(message.uri)
 			this.provider.log(`FilesChanged: Rejected change for ${message.uri} in task ${task?.taskId ?? "unknown"}`)
 			this.postChanges(manager)
+
+			// Open the reverted file (if it still exists after reject)
+			try {
+				// Resolve relative path to absolute path within workspace
+				const absolutePath = path.resolve(currentTask.cwd, message.uri)
+				const fileUri = vscode.Uri.file(absolutePath)
+				await vscode.window.showTextDocument(fileUri, { preview: false })
+			} catch (error) {
+				this.provider.log(`FilesChanged: File may have been deleted after reject: ${error}`)
+			}
+
 			currentTask.fileContextTracker?.emit?.("user_edited", message.uri)
 		} catch (error) {
-			this.provider.log(`FilesChanged: Error reverting file ${message.uri}: ${error}`)
+			this.provider.log(`FilesChanged: Error during reject: ${error}`)
+			// Still clean up diff tabs and UI even if revert failed
+			await this.closeDiffTabsForFile(message.uri)
 			manager.rejectChange(message.uri)
 			this.provider.log(`FilesChanged: Rejected change for ${message.uri} in task ${task?.taskId ?? "unknown"}`)
 			this.postChanges(manager)
@@ -789,6 +935,66 @@ export class FilesChangedMessageHandler {
 		}
 	}
 
+	/**
+	 * Efficiently process multiple files in a single batch operation
+	 * Avoids multiple getDiff/getDiffStats calls during edit bursts
+	 */
+	private async refreshEditedFilesBatch(task: Task | undefined, filePaths: string[]): Promise<void> {
+		if (!this.isEnabled || filePaths.length === 0) {
+			return
+		}
+
+		const checkpointService = task?.checkpointService
+		if (!checkpointService) {
+			return
+		}
+
+		const manager = this.getManager(task) ?? this.ensureManager(task)
+		if (!manager) {
+			return
+		}
+
+		const baseline = manager.getChanges().baseCheckpoint || checkpointService.baseHash
+		if (!baseline) {
+			return
+		}
+
+		try {
+			// Single getDiff call for all files - much more efficient than individual calls
+			const diffs = (await checkpointService.getDiff({ from: baseline })) || []
+			const stats = await checkpointService.getDiffStats({ from: baseline }).catch(() => undefined)
+
+			// Process each file in our batch
+			for (const filePath of filePaths) {
+				const change = diffs.find((entry: any) => entry.paths.relative === filePath)
+
+				if (!change) {
+					manager.removeFile(filePath)
+				} else {
+					const stat = stats?.[filePath]
+					const mapped = this.mapDiffToFileChange(change, baseline, stat)
+					manager.upsertFile(mapped)
+				}
+			}
+
+			// Single UI update for entire batch
+			this.postChanges(manager)
+
+			this.provider.log(`FilesChanged: Batch processed ${filePaths.length} files in single operation`)
+		} catch (error) {
+			this.provider.log(`FilesChanged: Failed to batch refresh files: ${error}`)
+
+			// Fallback to individual processing if batch fails
+			for (const filePath of filePaths) {
+				try {
+					await this.refreshEditedFile(task, filePath)
+				} catch (individualError) {
+					this.provider.log(`FilesChanged: Failed to refresh ${filePath}: ${individualError}`)
+				}
+			}
+		}
+	}
+
 	private async refreshAllFromBaseline(task: Task | undefined, existingManager?: FilesChangedManager): Promise<void> {
 		if (!this.isEnabled || this.isWaitingForTask(task)) {
 			return
@@ -831,26 +1037,31 @@ export class FilesChangedMessageHandler {
 		stat?: { insertions?: number; deletions?: number; added?: number; removed?: number },
 	): FileChange {
 		const type = (change.paths.newFile ? "create" : change.paths.deletedFile ? "delete" : "edit") as FileChangeType
-		const statInsertions = stat?.insertions ?? stat?.added ?? 0
-		const statDeletions = stat?.deletions ?? stat?.removed ?? 0
 
-		let linesAdded = statInsertions
-		let linesRemoved = statDeletions
+		// ALWAYS prioritize git diff stats when available - they are the most reliable source
+		let linesAdded = stat?.insertions ?? stat?.added ?? 0
+		let linesRemoved = stat?.deletions ?? stat?.removed ?? 0
 
-		if (type === "create") {
-			const after = change.content?.after || ""
-			linesAdded = after === "" ? 0 : after.split("\n").length
-			linesRemoved = 0
-		} else if (type === "delete") {
-			const before = change.content?.before || ""
-			linesAdded = 0
-			linesRemoved = before === "" ? 0 : before.split("\n").length
-		} else if (linesAdded === 0 && linesRemoved === 0) {
-			const before = change.content?.before || ""
-			const after = change.content?.after || ""
-			const diffCounts = FilesChangedManager.calculateLineDifferences(before, after)
-			linesAdded = diffCounts.linesAdded
-			linesRemoved = diffCounts.linesRemoved
+		// Only use lightweight content parsing for edge cases where git stats are completely missing
+		// This eliminates expensive diffLines fallback for normal operations
+		if (
+			stat === undefined ||
+			(stat.insertions === undefined &&
+				stat.deletions === undefined &&
+				stat.added === undefined &&
+				stat.removed === undefined)
+		) {
+			if (type === "create") {
+				const after = change.content?.after || ""
+				linesAdded = after === "" ? 0 : after.split("\n").length
+				linesRemoved = 0
+			} else if (type === "delete") {
+				const before = change.content?.before || ""
+				linesAdded = 0
+				linesRemoved = before === "" ? 0 : before.split("\n").length
+			}
+			// For edits with completely missing stats, accept 0/0 rather than expensive parsing
+			// Git stats being 0/0 is often correct (whitespace-only changes, etc.)
 		}
 
 		return {
