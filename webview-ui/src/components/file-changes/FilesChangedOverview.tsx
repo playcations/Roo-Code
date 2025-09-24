@@ -5,6 +5,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
 import { useDebouncedAction } from "@/hooks/useDebouncedAction"
 import { EXPERIMENT_IDS } from "../../../../src/shared/experiments"
+import styles from "./FilesChangedOverview.module.css"
 
 // Helper functions for file path display
 const getFileName = (uri: string): string => {
@@ -35,6 +36,12 @@ const FilesChangedOverview: React.FC = () => {
 	const [changeset, setChangeset] = React.useState<FileChangeset | null>(null)
 	const [isInitialized, setIsInitialized] = React.useState(false)
 
+	// Refs for dynamic CSS custom properties
+	const headerRef = React.useRef<HTMLDivElement>(null)
+	const contentRef = React.useRef<HTMLDivElement>(null)
+	const virtualizationContainerRef = React.useRef<HTMLDivElement>(null)
+	const virtualizationOffsetRef = React.useRef<HTMLDivElement>(null)
+
 	const files = React.useMemo<FileChange[]>(() => changeset?.files ?? [], [changeset?.files])
 	const [isCollapsed, setIsCollapsed] = React.useState(true)
 
@@ -62,6 +69,32 @@ const FilesChangedOverview: React.FC = () => {
 	}, [files, scrollTop, shouldVirtualize])
 
 	const { items: visibleItems, totalHeight, offsetY } = virtualizationState
+
+	// Update CSS custom properties for dynamic styling
+	React.useEffect(() => {
+		if (headerRef.current) {
+			const borderValue = isCollapsed ? "none" : "1px solid var(--vscode-panel-border)"
+			headerRef.current.style.setProperty("--header-border-bottom", borderValue)
+		}
+	}, [isCollapsed])
+
+	React.useEffect(() => {
+		if (contentRef.current) {
+			contentRef.current.style.setProperty("--content-opacity", isCollapsed ? "0" : "1")
+		}
+	}, [isCollapsed])
+
+	React.useEffect(() => {
+		if (virtualizationContainerRef.current && shouldVirtualize) {
+			virtualizationContainerRef.current.style.setProperty("--virtualization-height", `${totalHeight}px`)
+		}
+	}, [totalHeight, shouldVirtualize])
+
+	React.useEffect(() => {
+		if (virtualizationOffsetRef.current && shouldVirtualize) {
+			virtualizationOffsetRef.current.style.setProperty("--virtualization-transform", `translateY(${offsetY}px)`)
+		}
+	}, [offsetY, shouldVirtualize])
 
 	// Debounced click handling for double-click prevention
 	const { isProcessing, handleWithDebounce } = useDebouncedAction(300)
@@ -230,10 +263,8 @@ const FilesChangedOverview: React.FC = () => {
 			data-testid="files-changed-overview">
 			{/* Collapsible header */}
 			<div
-				className="flex justify-between items-center mt-0 cursor-pointer select-none"
-				style={{
-					borderBottom: isCollapsed ? "none" : "1px solid var(--vscode-panel-border)",
-				}}
+				ref={headerRef}
+				className={`flex justify-between items-center mt-0 cursor-pointer select-none ${styles.header}`}
 				onClick={() => setIsCollapsed(!isCollapsed)}
 				onKeyDown={(e) => {
 					if (e.key === "Enter" || e.key === " ") {
@@ -300,16 +331,14 @@ const FilesChangedOverview: React.FC = () => {
 			{/* Collapsible content area */}
 			{!isCollapsed && (
 				<div
-					className="max-h-[300px] overflow-y-auto transition-opacity duration-200 ease-in-out relative pt-2"
-					style={{
-						opacity: isCollapsed ? 0 : 1,
-					}}
+					ref={contentRef}
+					className={styles.content}
 					onScroll={handleScroll}
 					role="region"
 					aria-label={t("file-changes:header.files_changed", { defaultValue: "Files changed" })}>
 					{shouldVirtualize && (
-						<div style={{ height: totalHeight, position: "relative" }}>
-							<div style={{ transform: `translateY(${offsetY}px)` }}>
+						<div ref={virtualizationContainerRef} className={styles.virtualizationContainer}>
+							<div ref={virtualizationOffsetRef} className={styles.virtualizationOffset}>
 								{visibleItems.map((file) => (
 									<FileItem
 										key={file.uri}
