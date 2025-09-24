@@ -23,7 +23,6 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 	provideTextDocumentContent(uri: vscode.Uri): string {
 		const content = this.contentStore.get(uri.path)
 		if (!content) {
-			console.warn(`FcoTextDocumentContentProvider: No content found for URI path: ${uri.path}`)
 			return ""
 		}
 		return content
@@ -98,9 +97,7 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 	cleanup(uris: string[]): void {
 		uris.forEach((uri) => {
 			const key = uri.replace("fco-diff:", "")
-			if (this.contentStore.delete(key)) {
-				console.debug(`FcoTextDocumentContentProvider: Cleaned up content for ${key}`)
-			}
+			this.contentStore.delete(key)
 		})
 	}
 

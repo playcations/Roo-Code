@@ -110,7 +110,7 @@ export class FilesChangedMessageHandler {
 			try {
 				await this.refreshEditedFile(task, uri)
 			} catch (error) {
-				this.provider.log(`FilesChanged: Failed to process queued file ${uri}: ${error}`)
+				// Ignore queued file processing errors
 			}
 		}
 	}
@@ -195,19 +195,13 @@ export class FilesChangedMessageHandler {
 		}
 
 		if (enabled) {
-			if (task) {
-				try {
-					await getCheckpointService(task)
-				} catch (error) {
-					this.provider.log(`FilesChanged: Failed to initialize checkpoint service: ${error}`)
-					this.isEnabled = false
-					return
-				}
+			if (task && !(await this.initializeCheckpointService(task))) {
+				this.isEnabled = false
+				return
 			}
 
 			this.isEnabled = true
 			this.markWaitingForTask(task, true)
-			this.provider.log("FilesChanged: Enabled, waiting for next checkpoint to establish monitoring baseline")
 			this.clearFilesChangedDisplay()
 			await this.attachToTask(task)
 			this.replayTaskChanges(task)
@@ -221,7 +215,6 @@ export class FilesChangedMessageHandler {
 			}
 			await this.attachToTask(undefined)
 			this.clearFilesChangedDisplay()
-			this.provider.log("FilesChanged: Disabled")
 		}
 	}
 
@@ -331,30 +324,19 @@ export class FilesChangedMessageHandler {
 					if (hasExistingFiles && hadQueued) {
 						// Adding child files to existing parent files - preserve existing files
 						manager.setBaseline(baseline)
-						this.provider.log(
-							`FilesChanged: Updated baseline to ${baseline}, preserving ${manager.getChanges().files.length} existing files`,
-						)
 					} else {
 						// Starting fresh or no existing files - clear is appropriate
 						manager.reset(baseline)
-						this.provider.log(`FilesChanged: Reset to baseline ${baseline}`)
 					}
 				}
 				this.markWaitingForTask(task, false)
 
 				if (hadQueued) {
 					await this.drainQueuedUris(task, manager)
-					this.provider.log(
-						`FilesChanged: Processed queued Files Changed state after establishing baseline ${baseline ?? manager.getChanges().baseCheckpoint}`,
-					)
-				} else {
-					this.provider.log(
-						`FilesChanged: Established monitoring baseline at ${baseline ?? manager.getChanges().baseCheckpoint}`,
-					)
 				}
 				this.postChanges(manager)
 			} catch (error) {
-				this.provider.log(`FilesChanged: Failed to process checkpoint event: ${error}`)
+				this.provider.log(`FilesChanged: Failed to process checkpoint: ${error}`)
 			}
 		}
 		if (task?.checkpointService?.on) {
@@ -406,7 +388,7 @@ export class FilesChangedMessageHandler {
 				try {
 					await this.handleFileEditBatch(listeningTask)
 				} catch (error) {
-					this.provider.log(`FilesChanged: batch refresh failed: ${error}`)
+					// Batch refresh fallback is handled
 				}
 			}, debounceMs)
 		}
@@ -558,19 +540,16 @@ export class FilesChangedMessageHandler {
 					if (fileChangeData) {
 						await this.showFileDiff(message.uri, fileChangeData)
 					} else {
-						console.warn(`FilesChangedMessageHandler: No file change data found for URI: ${message.uri}`)
 						vscode.window.showInformationMessage(`No changes found for ${message.uri}`)
 					}
 				} catch (error) {
-					console.error(`FilesChangedMessageHandler: Failed to open diff for ${message.uri}:`, error)
+					this.provider.log(`FilesChanged: Failed to open diff: ${error}`)
 					vscode.window.showErrorMessage(`Failed to open diff for ${message.uri}: ${error.message}`)
 				}
 			} else {
-				console.warn(`FilesChangedMessageHandler: File change not found in changeset for URI: ${message.uri}`)
 				vscode.window.showInformationMessage(`File change not found for ${message.uri}`)
 			}
 		} else {
-			console.warn(`FilesChangedMessageHandler: Missing dependencies for viewDiff. URI: ${message.uri}`)
 			vscode.window.showErrorMessage("Unable to view diff - missing required dependencies")
 		}
 	}
@@ -592,9 +571,6 @@ export class FilesChangedMessageHandler {
 				{ preview: false },
 			)
 		} catch (fileError) {
-			console.error(
-				`Failed to open diff view: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
-			)
 			vscode.window.showErrorMessage(
 				`Failed to open diff view: ${fileError instanceof Error ? fileError.message : String(fileError)}`,
 			)
@@ -641,14 +617,14 @@ export class FilesChangedMessageHandler {
 				try {
 					await vscode.window.tabGroups.close(tab)
 				} catch (error) {
-					this.provider.log(`FilesChanged: Error closing diff tab: ${error}`)
+					// Ignore tab closing errors
 				}
 			}
 
 			// Clean up stored content
 			fcoProvider.cleanupFile(filePath)
 		} catch (error) {
-			this.provider.log(`FilesChanged: Error during diff tab cleanup for ${filePath}: ${error}`)
+			// Ignore cleanup errors
 		}
 	}
 
@@ -664,13 +640,11 @@ export class FilesChangedMessageHandler {
 
 		// Accept the change
 		manager.acceptChange(message.uri)
-		this.provider.log(`FilesChanged: Accepted change for ${message.uri} in task ${task?.taskId ?? "unknown"}`)
 		this.postChanges(manager)
 
 		// Open the modified file for user to see the accepted changes
 		try {
 			if (!task?.cwd) {
-				this.provider.log(`FilesChanged: Cannot open file - no task or workspace available`)
 				return
 			}
 			// Resolve relative path to absolute path within workspace
@@ -678,7 +652,7 @@ export class FilesChangedMessageHandler {
 			const fileUri = vscode.Uri.file(absolutePath)
 			await vscode.window.showTextDocument(fileUri, { preview: false })
 		} catch (error) {
-			this.provider.log(`FilesChanged: Could not open file after accept: ${error}`)
+			// Ignore file open failures
 		}
 	}
 
@@ -705,7 +679,6 @@ export class FilesChangedMessageHandler {
 			}
 
 			manager.rejectChange(message.uri)
-			this.provider.log(`FilesChanged: Rejected change for ${message.uri} in task ${task?.taskId ?? "unknown"}`)
 			this.postChanges(manager)
 
 			// Open the reverted file (if it still exists after reject)
@@ -715,7 +688,7 @@ export class FilesChangedMessageHandler {
 				const fileUri = vscode.Uri.file(absolutePath)
 				await vscode.window.showTextDocument(fileUri, { preview: false })
 			} catch (error) {
-				this.provider.log(`FilesChanged: File may have been deleted after reject: ${error}`)
+				// File may have been deleted after reject
 			}
 
 			currentTask.fileContextTracker?.emit?.("user_edited", message.uri)
@@ -724,7 +697,6 @@ export class FilesChangedMessageHandler {
 			// Still clean up diff tabs and UI even if revert failed
 			await this.closeDiffTabsForFile(message.uri)
 			manager.rejectChange(message.uri)
-			this.provider.log(`FilesChanged: Rejected change for ${message.uri} in task ${task?.taskId ?? "unknown"}`)
 			this.postChanges(manager)
 		}
 	}
@@ -736,7 +708,6 @@ export class FilesChangedMessageHandler {
 		const nextBaseline = checkpointService?.getCurrentCheckpoint?.()
 
 		manager?.acceptAll()
-		this.provider.log(`FilesChanged: Accepted all changes for task ${task?.taskId ?? "unknown"}`)
 		this.prepareForNextCheckpoint(task, nextBaseline, manager)
 	}
 
@@ -763,19 +734,15 @@ export class FilesChangedMessageHandler {
 				try {
 					await this.revertFileToCheckpoint(fileChange.uri, fileChange.fromCheckpoint, checkpointService)
 				} catch (error) {
-					this.provider.log(`FilesChanged: Failed to revert ${fileChange.uri}: ${error}`)
+					// Ignore individual file revert failures
 				}
 			}
 
 			manager.rejectAll()
-			this.provider.log(
-				`FilesChanged: Rejected ${filesToReject.length} change(s) for task ${task?.taskId ?? "unknown"}`,
-			)
 			this.prepareForNextCheckpoint(currentTask, undefined, manager)
 		} catch (error) {
 			this.provider.log(`FilesChanged: Failed to reject all changes: ${error}`)
 			manager.rejectAll()
-			this.provider.log(`FilesChanged: Rejected all remaining changes for task ${task?.taskId ?? "unknown"}`)
 			this.prepareForNextCheckpoint(currentTask, undefined, manager)
 		}
 	}
@@ -789,7 +756,7 @@ export class FilesChangedMessageHandler {
 			}
 			this.postChanges(manager)
 		} catch (error) {
-			this.provider.log(`FilesChangedMessageHandler: Error handling filesChangedRequest: ${error}`)
+			// Error handling files changed request
 		}
 	}
 
@@ -807,7 +774,7 @@ export class FilesChangedMessageHandler {
 				this.prepareForNextCheckpoint(task, message.baseline, manager)
 			}
 		} catch (error) {
-			this.provider.log(`FilesChangedMessageHandler: Failed to update baseline: ${error}`)
+			// Failed to update baseline
 		}
 	}
 
@@ -819,6 +786,23 @@ export class FilesChangedMessageHandler {
 	 */
 	public async initializeFilesChangedFromSettings(): Promise<void> {
 		await this.applyExperimentsToTask(this.provider.getCurrentTask() as Task | undefined)
+	}
+
+	/**
+	 * Safely initialize checkpoint service with error logging
+	 */
+	private async initializeCheckpointService(task: Task | undefined): Promise<boolean> {
+		if (!task) {
+			return false
+		}
+
+		try {
+			await getCheckpointService(task)
+			return true
+		} catch (error) {
+			this.provider.log(`FilesChanged: Failed to initialize checkpoint service: ${error}`)
+			return false
+		}
 	}
 
 	public async applyExperimentsToTask(task: Task | undefined): Promise<void> {
@@ -838,10 +822,7 @@ export class FilesChangedMessageHandler {
 			return
 		}
 
-		try {
-			await getCheckpointService(task)
-		} catch (error) {
-			this.provider.log(`FilesChanged: Failed to initialize checkpoint service: ${error}`)
+		if (!(await this.initializeCheckpointService(task))) {
 			return
 		}
 
@@ -918,8 +899,6 @@ export class FilesChangedMessageHandler {
 
 			this.postChanges(manager)
 		} catch (error) {
-			this.provider.log(`FilesChanged: Failed to refresh ${filePath}: ${error}`)
-
 			// If we get "bad object" errors, reset FCO state to wait for next checkpoint
 			if (
 				error &&
@@ -976,11 +955,8 @@ export class FilesChangedMessageHandler {
 					manager.upsertFile(mapped)
 				}
 			}
-
 			// Single UI update for entire batch
 			this.postChanges(manager)
-
-			this.provider.log(`FilesChanged: Batch processed ${filePaths.length} files in single operation`)
 		} catch (error) {
 			this.provider.log(`FilesChanged: Failed to batch refresh files: ${error}`)
 
@@ -989,7 +965,7 @@ export class FilesChangedMessageHandler {
 				try {
 					await this.refreshEditedFile(task, filePath)
 				} catch (individualError) {
-					this.provider.log(`FilesChanged: Failed to refresh ${filePath}: ${individualError}`)
+					// Individual refresh errors handled in refreshEditedFile
 				}
 			}
 		}
@@ -1027,7 +1003,7 @@ export class FilesChangedMessageHandler {
 
 			this.postChanges(manager)
 		} catch (error) {
-			this.provider.log(`FilesChanged: Failed to refresh changes from baseline: ${error}`)
+			// Failed to refresh changes from baseline
 		}
 	}
 
@@ -1099,7 +1075,6 @@ export class FilesChangedMessageHandler {
 		this.markWaitingForTask(task, true)
 		this.clearFilesChangedDisplay()
 		const suffix = baselineHint ? ` (${baselineHint})` : ""
-		this.provider.log(`FilesChanged: Cleared state; waiting for next checkpoint${suffix} to re-establish baseline`)
 	}
 
 	public async handleChildTaskCompletion(childTask: Task | undefined, parentTask: Task | undefined): Promise<void> {
@@ -1119,17 +1094,10 @@ export class FilesChangedMessageHandler {
 					childTask.checkpointService.baseHash ||
 					childTask.checkpointService.getCurrentCheckpoint?.()
 
-				if (!fallbackBaseline) {
-					this.provider.log(
-						`FilesChanged: No baseline available for fallback diff on subtask ${childTask.taskId}`,
-					)
-				} else {
+				if (fallbackBaseline) {
 					const checkpointDiff = await childTask.checkpointService.getDiff({ from: fallbackBaseline })
 					if (checkpointDiff && checkpointDiff.length > 0) {
 						pendingUris = checkpointDiff.map((diff: any) => diff.paths.relative)
-						this.provider.log(
-							`FilesChanged: Fallback detected ${pendingUris.length} file(s) from subtask ${childTask.taskId} via diff from ${fallbackBaseline}`,
-						)
 					}
 				}
 			} catch (error) {
@@ -1156,9 +1124,6 @@ export class FilesChangedMessageHandler {
 		}
 
 		if (!this.isEnabled) {
-			this.provider.log(
-				`FilesChanged: Ignored queued files from subtask ${childTaskId} because FilesChanged is disabled`,
-			)
 			return
 		}
 
@@ -1168,9 +1133,5 @@ export class FilesChangedMessageHandler {
 		if (!this.isWaitingForTask(parentTask)) {
 			void this.drainQueuedUris(parentTask)
 		}
-
-		this.provider.log(
-			`FilesChanged: Queued ${childFileUris.length} file(s) from subtask ${childTaskId} for parent ${parentTask.taskId}`,
-		)
 	}
 }
