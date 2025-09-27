@@ -200,21 +200,39 @@ const FilesChangedOverview: React.FC = () => {
 				return
 			}
 
+			// Only process known message types to avoid noisy updates
 			switch (message.type) {
 				case "filesChanged":
-					if (message.filesChanged) {
-						checkInit(message.filesChanged.baseCheckpoint)
-						updateChangeset(message.filesChanged)
-					} else {
-						// Clear the changeset
-						setChangeset(null)
+					// Additional validation for filesChanged message shape
+					if ("filesChanged" in message) {
+						if (
+							message.filesChanged &&
+							typeof message.filesChanged === "object" &&
+							typeof message.filesChanged.baseCheckpoint === "string" &&
+							Array.isArray(message.filesChanged.files)
+						) {
+							checkInit(message.filesChanged.baseCheckpoint)
+							updateChangeset(message.filesChanged)
+						} else if (message.filesChanged === null || message.filesChanged === undefined) {
+							// Clear the changeset
+							setChangeset(null)
+						}
 					}
 					break
 				case "checkpoint":
-					handleCheckpointCreated(message.checkpoint, message.previousCheckpoint)
+					// Additional validation for checkpoint message shape
+					if (
+						typeof message.checkpoint === "string" &&
+						(message.previousCheckpoint === undefined || typeof message.previousCheckpoint === "string")
+					) {
+						handleCheckpointCreated(message.checkpoint, message.previousCheckpoint)
+					}
 					break
 				case "checkpointRestored":
-					handleCheckpointRestored(message.checkpoint)
+					// Additional validation for checkpointRestored message shape
+					if (typeof message.checkpoint === "string") {
+						handleCheckpointRestored(message.checkpoint)
+					}
 					break
 			}
 		}
