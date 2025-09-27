@@ -129,4 +129,40 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 		this.contentStore.clear()
 		this.fileToUriMapping.clear()
 	}
+
+	/**
+	 * Register a listener to automatically clean up content when diff documents are closed.
+	 * Should be called during extension activation.
+	 */
+	registerCloseListener(): vscode.Disposable {
+		return vscode.workspace.onDidCloseTextDocument((document) => {
+			// Only handle fco-diff scheme documents
+			if (document.uri.scheme === "fco-diff") {
+				this.cleanupByUri(document.uri.toString())
+			}
+		})
+	}
+
+	/**
+	 * Clean up content for a specific URI.
+	 * Called when a diff document is closed to prevent memory leaks.
+	 */
+	private cleanupByUri(uriString: string): void {
+		const key = uriString.replace("fco-diff:", "")
+		this.contentStore.delete(key)
+
+		// Also clean up any file mappings that reference this URI
+		for (const [filePath, uris] of this.fileToUriMapping.entries()) {
+			if (uris.beforeUri === uriString || uris.afterUri === uriString) {
+				// If both before and after URIs are being removed, delete the mapping
+				const beforeKey = uris.beforeUri.replace("fco-diff:", "")
+				const afterKey = uris.afterUri.replace("fco-diff:", "")
+
+				if (!this.contentStore.has(beforeKey) && !this.contentStore.has(afterKey)) {
+					this.fileToUriMapping.delete(filePath)
+				}
+				break
+			}
+		}
+	}
 }

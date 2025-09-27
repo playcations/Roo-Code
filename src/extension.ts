@@ -258,6 +258,9 @@ export async function activate(context: vscode.ExtensionContext) {
 	const fcoContentProvider = FcoTextDocumentContentProvider.getInstance()
 	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider("fco-diff", fcoContentProvider))
 
+	// Register automatic cleanup listener for when diff documents are closed
+	context.subscriptions.push(fcoContentProvider.registerCloseListener())
+
 	context.subscriptions.push(vscode.window.registerUriHandler({ handleUri }))
 
 	// Register code actions provider.
