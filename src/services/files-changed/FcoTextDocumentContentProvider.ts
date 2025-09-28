@@ -9,6 +9,10 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 	private fileToUriMapping = new Map<string, { beforeUri: string; afterUri: string }>()
 	private static instance: FcoTextDocumentContentProvider
 
+	private normalizeKey(rawKey: string): string {
+		return rawKey.startsWith("/") ? rawKey.slice(1) : rawKey
+	}
+
 	static getInstance(): FcoTextDocumentContentProvider {
 		if (!this.instance) {
 			this.instance = new FcoTextDocumentContentProvider()
@@ -21,7 +25,8 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 	 * Called by VS Code when it needs the actual content for a URI.
 	 */
 	provideTextDocumentContent(uri: vscode.Uri): string {
-		const content = this.contentStore.get(uri.path)
+		const key = this.normalizeKey(uri.path)
+		const content = this.contentStore.get(key)
 		if (!content) {
 			return ""
 		}
@@ -40,8 +45,8 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 	): { beforeUri: string; afterUri: string } {
 		// Create stable ID based on file path and content hash to prevent duplicates
 		const contentHash = this.hashContent(beforeContent + afterContent + (filePath || ""))
-		const beforeKey = `before-${contentHash}`
-		const afterKey = `after-${contentHash}`
+		const beforeKey = this.normalizeKey(`before-${contentHash}`)
+		const afterKey = this.normalizeKey(`after-${contentHash}`)
 
 		// Check if already exists - reuse existing URIs to prevent duplicate diffs
 		if (this.contentStore.has(beforeKey)) {
@@ -96,7 +101,7 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 	 */
 	cleanup(uris: string[]): void {
 		uris.forEach((uri) => {
-			const key = uri.replace("fco-diff:", "")
+			const key = this.normalizeKey(uri.replace("fco-diff:", ""))
 			this.contentStore.delete(key)
 		})
 	}
@@ -148,7 +153,7 @@ export class FcoTextDocumentContentProvider implements vscode.TextDocumentConten
 	 * Called when a diff document is closed to prevent memory leaks.
 	 */
 	private cleanupByUri(uriString: string): void {
-		const key = uriString.replace("fco-diff:", "")
+		const key = this.normalizeKey(uriString.replace("fco-diff:", ""))
 		this.contentStore.delete(key)
 
 		// Also clean up any file mappings that reference this URI
