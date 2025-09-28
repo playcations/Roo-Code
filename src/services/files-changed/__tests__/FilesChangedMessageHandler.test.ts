@@ -148,13 +148,13 @@ describe("FilesChangedMessageHandler", () => {
 
 		posts.length = 0
 		await handler.handleMessage({ type: "acceptAllFileChanges" } as any)
-		expect(getLatestFilesMessage()).toEqual({ type: "filesChanged", filesChanged: undefined })
+		expect(getLatestFilesMessage()).toEqual({ type: "filesChanged", filesChanged: null })
 		expect(taskState.isWaiting()).toBe(true)
 
 		checkpointService.getDiff.mockClear()
 		fileContextTracker.emit("roo_edited", "app/foo.ts")
 		await advance()
-		expect(getLatestFilesMessage()).toEqual({ type: "filesChanged", filesChanged: undefined })
+		expect(getLatestFilesMessage()).toEqual({ type: "filesChanged", filesChanged: null })
 		expect(checkpointService.getDiff).not.toHaveBeenCalled()
 
 		await emitBaseline(checkpointService, "commit-C", "commit-D")
@@ -242,7 +242,7 @@ describe("FilesChangedMessageHandler", () => {
 		await handler.handleMessage({ type: "rejectFileChange", uri: "app/foo.ts" } as any)
 		expect(checkpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("commit-A", "app/foo.ts")
 		expect(emitSpy).toHaveBeenCalledWith("user_edited", "app/foo.ts")
-		expect(getLatestFilesMessage()).toEqual({ type: "filesChanged", filesChanged: undefined })
+		expect(getLatestFilesMessage()).toEqual({ type: "filesChanged", filesChanged: null })
 	})
 
 	it("recomputes all files when tracker emits wildcard", async () => {

@@ -291,7 +291,7 @@ export class FilesChangedMessageHandler {
 	private clearFilesChangedDisplay(): void {
 		this.provider.postMessageToWebview({
 			type: "filesChanged",
-			filesChanged: undefined,
+			filesChanged: null,
 		})
 	}
 
@@ -1052,10 +1052,8 @@ export class FilesChangedMessageHandler {
 
 	private postChanges(manager: FilesChangedManager): void {
 		const changeset = manager.getChanges()
-		this.provider.postMessageToWebview({
-			type: "filesChanged",
-			filesChanged: changeset.files.length > 0 ? changeset : undefined,
-		})
+		const payload = changeset.files.length > 0 ? changeset : null
+		this.provider.postMessageToWebview({ type: "filesChanged", filesChanged: payload })
 	}
 
 	private prepareForNextCheckpoint(
