@@ -265,17 +265,27 @@ export class FilesChangedMessageHandler {
 			this.setupTrackerListener(task)
 		}
 
+		let manager = this.getManager(task)
+		if (!manager) {
+			manager = this.ensureManager(task)
+			const baseline = manager?.getChanges().baseCheckpoint
+			if (!baseline || baseline === "HEAD") {
+				this.markWaitingForTask(task, true)
+			}
+		}
+
 		if (this.isWaitingForTask(task)) {
 			this.clearFilesChangedDisplay()
 			return
 		}
 
-		const manager = this.getManager(task) ?? this.ensureManager(task)
+		manager = manager ?? this.ensureManager(task)
 		if (!manager) {
 			return
 		}
 
-		if (state?.hasQueuedChildUris() && !this.isWaitingForTask(task)) {
+		const stateWithManager = state ?? this.getState(task)
+		if (stateWithManager?.hasQueuedChildUris() && !this.isWaitingForTask(task)) {
 			await this.drainQueuedUris(task, manager)
 		}
 
@@ -731,9 +741,15 @@ export class FilesChangedMessageHandler {
 
 		try {
 			const changeset = manager.getChanges()
-			const filesToReject = message.uris
-				? changeset.files.filter((file: any) => message.uris!.includes(file.uri))
+			const specifiedUris = Array.isArray(message.uris) ? new Set<string>(message.uris as string[]) : undefined
+			const filesToReject = specifiedUris
+				? changeset.files.filter((file: any) => specifiedUris.has(file.uri))
 				: changeset.files
+			if (specifiedUris && filesToReject.length === 0) {
+				return
+			}
+
+			const isPartialReject = specifiedUris !== undefined && filesToReject.length < changeset.files.length
 
 			for (const fileChange of filesToReject) {
 				try {
@@ -743,12 +759,37 @@ export class FilesChangedMessageHandler {
 				}
 			}
 
-			manager.rejectAll()
-			this.prepareForNextCheckpoint(currentTask, undefined, manager)
+			if (isPartialReject) {
+				for (const fileChange of filesToReject) {
+					manager.rejectChange(fileChange.uri)
+				}
+				this.postChanges(manager)
+			} else {
+				manager.rejectAll()
+				this.prepareForNextCheckpoint(currentTask, undefined, manager)
+			}
 		} catch (error) {
 			this.provider.log(`FilesChanged: Failed to reject all changes: ${error}`)
-			manager.rejectAll()
-			this.prepareForNextCheckpoint(currentTask, undefined, manager)
+
+			const changeset = manager.getChanges()
+			const specifiedUris = Array.isArray(message.uris) ? new Set<string>(message.uris as string[]) : undefined
+			const filesToReject = specifiedUris
+				? changeset.files.filter((file: any) => specifiedUris.has(file.uri))
+				: changeset.files
+			if (specifiedUris && filesToReject.length === 0) {
+				return
+			}
+			const isPartialReject = specifiedUris !== undefined && filesToReject.length < changeset.files.length
+
+			if (isPartialReject) {
+				for (const fileChange of filesToReject) {
+					manager.rejectChange(fileChange.uri)
+				}
+				this.postChanges(manager)
+			} else {
+				manager.rejectAll()
+				this.prepareForNextCheckpoint(currentTask, undefined, manager)
+			}
 		}
 	}
 

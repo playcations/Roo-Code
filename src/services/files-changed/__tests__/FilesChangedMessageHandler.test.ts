@@ -41,6 +41,7 @@ describe("FilesChangedMessageHandler", () => {
 	let taskState: TaskFilesChangedState
 	let posts: any[]
 	let provider: any
+	let currentTask: Task
 
 	beforeEach(() => {
 		vi.useFakeTimers()
@@ -60,10 +61,11 @@ describe("FilesChangedMessageHandler", () => {
 			getFilesChangedState: vi.fn(() => taskState),
 			disposeFilesChangedState: vi.fn(() => taskState.dispose()),
 		} as unknown as Task
+		currentTask = task
 
 		provider = {
 			log: vi.fn(),
-			getCurrentTask: () => task,
+			getCurrentTask: () => currentTask,
 			getState: vi.fn(async () => ({
 				experiments: {
 					filesChangedOverview: { enabled: true },
@@ -111,6 +113,58 @@ describe("FilesChangedMessageHandler", () => {
 		expect(message?.filesChanged?.files?.[0]?.uri).toBe("app/foo.ts")
 	})
 
+	it("keeps newly attached tasks idle until their first checkpoint", async () => {
+		await handler.handleExperimentToggle(true, provider.getCurrentTask())
+		await emitBaseline()
+
+		posts.length = 0
+
+		const secondCheckpointService = new MockCheckpointService()
+		secondCheckpointService.baseHash = "base-B"
+		secondCheckpointService.getDiff = vi.fn(async () => [
+			{
+				paths: { relative: "app/child.ts", newFile: false, deletedFile: false },
+				content: { before: "console.log('a')\n", after: "console.log('b')\n" },
+			},
+		])
+		secondCheckpointService.getDiffStats = vi.fn(async () => ({
+			"app/child.ts": { insertions: 1, deletions: 0 },
+		}))
+
+		const secondTracker = new MockFileContextTracker()
+		const secondState = new TaskFilesChangedState()
+		const secondTask = {
+			taskId: "task-2",
+			checkpointService: secondCheckpointService,
+			fileContextTracker: secondTracker,
+			ensureFilesChangedState: vi.fn(() => secondState),
+			getFilesChangedState: vi.fn(() => secondState),
+			disposeFilesChangedState: vi.fn(() => secondState.dispose()),
+		} as unknown as Task
+
+		vi.mocked(getCheckpointService).mockImplementation(async (requestedTask: Task) =>
+			requestedTask === secondTask ? (secondCheckpointService as any) : (checkpointService as any),
+		)
+
+		currentTask = secondTask
+		await handler.applyExperimentsToTask(secondTask)
+
+		expect(secondState.isWaiting()).toBe(true)
+		posts.length = 0
+
+		secondTracker.emit("roo_edited", "app/child.ts")
+		await advance()
+		expect(getLatestFilesMessage()).toBeUndefined()
+
+		await emitBaseline(secondCheckpointService, "commit-C", "commit-D")
+		expect(secondState.isWaiting()).toBe(false)
+
+		await advance()
+		const message = getLatestFilesMessage()
+		expect(secondCheckpointService.getDiff).toHaveBeenCalledWith({ from: "commit-C" })
+		expect(message?.filesChanged?.files?.[0]?.uri).toBe("app/child.ts")
+	})
+
 	it("keeps existing entries when additional files change", async () => {
 		await handler.handleExperimentToggle(true, provider.getCurrentTask())
 		await emitBaseline()
@@ -137,6 +191,47 @@ describe("FilesChangedMessageHandler", () => {
 		await advance()
 		const message = getLatestFilesMessage()
 		expect(message?.filesChanged?.files?.map((f: any) => f.uri).sort()).toEqual(["app/bar.ts", "app/foo.ts"])
+	})
+
+	it("rejects only the selected files when uris are provided", async () => {
+		await handler.handleExperimentToggle(true, provider.getCurrentTask())
+		await emitBaseline()
+
+		fileContextTracker.emit("roo_edited", "app/foo.ts")
+		await advance()
+
+		checkpointService.getDiff.mockResolvedValueOnce([
+			{
+				paths: { relative: "app/foo.ts", newFile: false, deletedFile: false },
+				content: { before: "console.log(2)\n", after: "console.log(3)\n" },
+			},
+			{
+				paths: { relative: "app/bar.ts", newFile: false, deletedFile: false },
+				content: { before: "let x = 1\n", after: "let x = 5\n" },
+			},
+		])
+		checkpointService.getDiffStats.mockResolvedValueOnce({
+			"app/foo.ts": { insertions: 1, deletions: 1 },
+			"app/bar.ts": { insertions: 1, deletions: 1 },
+		})
+
+		fileContextTracker.emit("roo_edited", "app/bar.ts")
+		await advance()
+
+		posts.length = 0
+		checkpointService.restoreFileFromCheckpoint.mockClear()
+		const rejectAllSpy = vi.spyOn(manager, "rejectAll")
+
+		await handler.handleMessage({ type: "rejectAllFileChanges", uris: ["app/foo.ts"] } as any)
+
+		expect(checkpointService.restoreFileFromCheckpoint).toHaveBeenCalledWith("commit-A", "app/foo.ts")
+		expect(checkpointService.restoreFileFromCheckpoint).not.toHaveBeenCalledWith("commit-A", "app/bar.ts")
+		expect(rejectAllSpy).not.toHaveBeenCalled()
+		expect(taskState.isWaiting()).toBe(false)
+
+		const latest = getLatestFilesMessage()
+		expect(latest?.filesChanged?.files?.map((f: any) => f.uri)).toEqual(["app/bar.ts"])
+		rejectAllSpy.mockRestore()
 	})
 
 	it("waits for a new checkpoint after accepting all changes", async () => {
