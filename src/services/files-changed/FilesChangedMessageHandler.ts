@@ -580,11 +580,11 @@ export class FilesChangedMessageHandler {
 	/**
 	 * Closes diff tabs for a specific file and cleans up stored content
 	 */
-	private async closeDiffTabsForFile(filePath: string): Promise<void> {
+	private async closeDiffTabsForFile(filePath: string): Promise<boolean> {
 		const fcoProvider = FcoTextDocumentContentProvider.getInstance()
 		const uris = fcoProvider.getUrisForFile(filePath)
 
-		if (!uris) return
+		if (!uris) return false
 
 		try {
 			// Find and close diff tabs
@@ -623,20 +623,24 @@ export class FilesChangedMessageHandler {
 
 			// Clean up stored content
 			fcoProvider.cleanupFile(filePath)
+
+			return diffTabsToClose.length > 0
 		} catch (error) {
 			// Ignore cleanup errors
 		}
+
+		return false
 	}
 
 	private async handleAcceptFileChange(message: WebviewMessage): Promise<void> {
+		const diffWasOpen = message.uri ? await this.closeDiffTabsForFile(message.uri) : false
 		const task = this.resolveTask()
 		const manager = this.getManager(task) ?? this.ensureManager(task)
 		if (!manager || !message.uri) {
 			return
 		}
 
-		// Close diff tabs and clean up content first
-		await this.closeDiffTabsForFile(message.uri)
+		// Diff cleanup handled above; only open the file if the diff was shown
 
 		// Accept the change
 		manager.acceptChange(message.uri)
@@ -650,13 +654,16 @@ export class FilesChangedMessageHandler {
 			// Resolve relative path to absolute path within workspace
 			const absolutePath = path.resolve(task.cwd, message.uri)
 			const fileUri = vscode.Uri.file(absolutePath)
-			await vscode.window.showTextDocument(fileUri, { preview: false })
+			if (diffWasOpen) {
+				await vscode.window.showTextDocument(fileUri, { preview: false })
+			}
 		} catch (error) {
 			// Ignore file open failures
 		}
 	}
 
 	private async handleRejectFileChange(message: WebviewMessage): Promise<void> {
+		const diffWasOpen = message.uri ? await this.closeDiffTabsForFile(message.uri) : false
 		const task = this.resolveTask()
 		const manager = this.getManager(task) ?? this.ensureManager(task)
 		if (!message.uri || !manager) {
@@ -670,9 +677,6 @@ export class FilesChangedMessageHandler {
 		}
 
 		try {
-			// Close diff tabs and clean up content first
-			await this.closeDiffTabsForFile(message.uri)
-
 			const fileChange = manager.getFileChange(message.uri)
 			if (fileChange) {
 				await this.revertFileToCheckpoint(message.uri, fileChange.fromCheckpoint, checkpointService)
@@ -686,7 +690,9 @@ export class FilesChangedMessageHandler {
 				// Resolve relative path to absolute path within workspace
 				const absolutePath = path.resolve(currentTask.cwd, message.uri)
 				const fileUri = vscode.Uri.file(absolutePath)
-				await vscode.window.showTextDocument(fileUri, { preview: false })
+				if (diffWasOpen) {
+					await vscode.window.showTextDocument(fileUri, { preview: false })
+				}
 			} catch (error) {
 				// File may have been deleted after reject
 			}
@@ -695,7 +701,6 @@ export class FilesChangedMessageHandler {
 		} catch (error) {
 			this.provider.log(`FilesChanged: Error during reject: ${error}`)
 			// Still clean up diff tabs and UI even if revert failed
-			await this.closeDiffTabsForFile(message.uri)
 			manager.rejectChange(message.uri)
 			this.postChanges(manager)
 		}
